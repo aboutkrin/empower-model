@@ -15,7 +15,7 @@ export default defineConfig({
     },
   },
   build: {
-    target: 'esnext',
+    target: 'es2020',
     rollupOptions: {
       output: {
         manualChunks: undefined
@@ -23,6 +23,7 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
-    include: ['react', 'react-dom']
+    include: ['react', 'react-dom'],
+    exclude: ['@rollup/rollup-linux-x64-gnu']
   }
 })

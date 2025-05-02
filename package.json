@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "engines": {
-    "node": "20.x"
+    "node": "20.11.1",
+    "npm": "10.2.4"
   },
   "scripts": {
     "dev": "vite",
@@ -39,5 +40,8 @@
     "typescript": "~5.3.3",
     "typescript-eslint": "^8.26.1",
     "vite": "^5.1.4"
-  }
+  },
+  "cacheDirectories": [
+    "node_modules"
+  ]
 }
