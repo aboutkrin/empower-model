@@ -10,6 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.1",
+    "@types/marked": "^5.0.2",
+    "@types/node": "^22.15.3",
+    "marked": "^15.0.11",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^2.15.3"

@@ -75,6 +75,38 @@ const pieColors = [
   '#6366F1', '#F59E42', '#10B981', '#EF4444', '#3B82F6', '#FBBF24', '#A78BFA', '#F472B6', '#34D399', '#F87171', '#60A5FA', '#FCD34D', '#C084FC', '#F9A8D4', '#6EE7B7', '#FCA5A5', '#93C5FD', '#FDE68A', '#DDD6FE', '#FBCFE8'
 ];
 
+// Add this constant at the top of the file, after the imports
+const AVAILABLE_PRODUCT_TIERS = [
+  'Em-Unic',
+  'Em-One',
+  'Em-Pro',
+  'Em-Star'
+];
+
+// Add these interfaces near the top of the file with other interfaces
+interface ProductCostBreakdown {
+  productName: string;
+  price: number;
+  volume: number;
+  variableCosts: Array<{
+    name: string;
+    unitCost: number;
+    totalCost: number;
+    percentageOfPrice: number;
+  }>;
+  allocatedFixedCosts: Array<{
+    name: string;
+    allocatedCost: number;
+    percentageOfPrice: number;
+  }>;
+  totalCost: number;
+  margin: number;
+  marginPercentage: number;
+}
+
+// Add TypeScript interfaces for better type safety
+type TabType = 'dashboard' | 'financials' | 'cashflow' | 'breakeven' | 'breakevenWithDebt' | 'productCostAnalysis' | 'costing' | 'loans' | 'statistics';
+
 const EmpowerModel = () => {
   const [modelData, setModelData] = useState({
     capacity: 10000,
@@ -82,7 +114,9 @@ const EmpowerModel = () => {
     years: Array.from({ length: 10 }, (_, i) => 2023 + i), // Creates array [2023, 2024, ..., 2032]
   });
 
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState<TabType>('dashboard');
+  const [activeSubTab, setActiveSubTab] = useState('costs');
+  const [activeProductTier, setActiveProductTier] = useState<'all' | string>('all');
   const [loading, setLoading] = useState(true);
   const [capacityUsage, setCapacityUsage] = useState(75);
   const [priceTiers, setPriceTiers] = useState([
@@ -177,9 +211,11 @@ const EmpowerModel = () => {
   // Add this function to update years when configuration changes
   const updateYearRange = (startYear: number, duration: number) => {
     setYearConfig({ startYear, duration });
+    // Generate array of years from start year to start year + duration
+    const years = Array.from({ length: duration }, (_, i) => startYear + i);
     setModelData(prev => ({
       ...prev,
-      years: Array.from({ length: duration }, (_, i) => startYear + i)
+      years
     }));
   };
   
@@ -439,7 +475,7 @@ const EmpowerModel = () => {
           }
         }
         return sum;
-      }, 0);
+    }, 0);
     };
 
     // Find break-even volume using binary search
@@ -469,7 +505,7 @@ const EmpowerModel = () => {
     }
 
     breakEvenCapacity = (breakEvenVolume / modelData.capacity) * 100;
-
+    
     // Find break-even year considering volume growth
     for (let year = 0; year < yearConfig.duration; year++) {
       const yearsSinceStart = year;
@@ -602,10 +638,7 @@ const EmpowerModel = () => {
 
   // Add this helper function for number formatting
   const formatNumber = (num: number) => {
-    return num.toLocaleString('en-US', {
-      maximumFractionDigits: 2,
-      minimumFractionDigits: 0
-    });
+    return num.toLocaleString();
   };
 
   // Add this helper function for input number formatting
@@ -617,8 +650,8 @@ const EmpowerModel = () => {
   };
 
   // Add this helper function to parse formatted number back to numeric value
-  const parseFormattedNumber = (value: string) => {
-    return parseFloat(value.replace(/,/g, '')) || 0;
+  const parseFormattedNumber = (str: string) => {
+    return parseFloat(str.replace(/,/g, '')) || 0;
   };
 
   // Helper function to calculate yearly capacity usage
@@ -715,9 +748,12 @@ const EmpowerModel = () => {
     }, 0);
   };
 
-  const calculateMonthlyFixedCost = () => {
-    return fixedCosts.reduce((sum, item) => {
+  const calculateMonthlyFixedCost = (costs: typeof fixedCosts) => {
+    return costs.reduce((sum, item) => {
       if (item.monthly) return sum + item.cost;
+      if (item.annual && item.type === "depreciation") {
+        return sum + (item.cost / (item.years || 1) / 12);
+      }
       if (item.annual) return sum + (item.cost / 12);
       return sum;
     }, 0);
@@ -856,7 +892,7 @@ const EmpowerModel = () => {
 
   // Scenario handler
   const handleScenarioChange = (newScenario: 'base' | 'optimistic' | 'pessimistic') => {
-    if (newScenario === scenario) return;
+    if (newScenario === scenario && newScenario !== 'base') return;
     if (!originalParams) {
       setOriginalParams({
         priceGrowth,
@@ -872,34 +908,92 @@ const EmpowerModel = () => {
       setPriceTiers(JSON.parse(JSON.stringify(originalParams.priceTiers)));
       setVariableCosts(JSON.parse(JSON.stringify(originalParams.variableCosts)));
       setFixedCosts(JSON.parse(JSON.stringify(originalParams.fixedCosts)));
+      setWhatIf({ price: 0, variable: 0, fixed: 0 });
     } else if (newScenario === 'optimistic') {
       setPriceGrowth((originalParams?.priceGrowth ?? priceGrowth) + 2);
       setCapacityGrowth((originalParams?.capacityGrowth ?? capacityGrowth) + 5);
-      setVariableCosts((originalParams?.variableCosts ?? variableCosts).map((v: any) => ({ ...v, unitCost: v.unitCost * 0.95 })));
-      setFixedCosts((originalParams?.fixedCosts ?? fixedCosts).map((f: any) => ({ ...f, cost: f.cost * 0.97 })));
+      setVariableCosts((originalParams?.variableCosts ?? variableCosts).map((v: any) => ({ 
+        ...v, 
+        unitCost: Number((v.unitCost * 0.95).toFixed(2))
+      })));
+      setFixedCosts((originalParams?.fixedCosts ?? fixedCosts).map((f: any) => ({ 
+        ...f, 
+        cost: Number((f.cost * 0.97).toFixed(2))
+      })));
+      setWhatIf({ price: 0, variable: -5, fixed: -3 });
     } else if (newScenario === 'pessimistic') {
       setPriceGrowth((originalParams?.priceGrowth ?? priceGrowth) - 1);
       setCapacityGrowth((originalParams?.capacityGrowth ?? capacityGrowth) - 3);
-      setVariableCosts((originalParams?.variableCosts ?? variableCosts).map((v: any) => ({ ...v, unitCost: v.unitCost * 1.07 })));
-      setFixedCosts((originalParams?.fixedCosts ?? fixedCosts).map((f: any) => ({ ...f, cost: f.cost * 1.05 })));
+      setVariableCosts((originalParams?.variableCosts ?? variableCosts).map((v: any) => ({ 
+        ...v, 
+        unitCost: Number((v.unitCost * 1.07).toFixed(2))
+      })));
+      setFixedCosts((originalParams?.fixedCosts ?? fixedCosts).map((f: any) => ({ 
+        ...f, 
+        cost: Number((f.cost * 1.05).toFixed(2))
+      })));
+      setWhatIf({ price: 0, variable: 7, fixed: 5 });
     }
     setScenario(newScenario);
   };
 
   // What-if quick input state
   const [whatIf, setWhatIf] = useState({ price: 0, variable: 0, fixed: 0 });
+  // Store the scenario base values to prevent compounding
+  const [scenarioBaseValues, setScenarioBaseValues] = useState<{
+    priceTiers: typeof priceTiers,
+    variableCosts: typeof variableCosts,
+    fixedCosts: typeof fixedCosts
+  } | null>(null);
+
+  // Update scenario base values when scenario changes
+  useEffect(() => {
+    setScenarioBaseValues({
+      priceTiers: JSON.parse(JSON.stringify(priceTiers)),
+      variableCosts: JSON.parse(JSON.stringify(variableCosts)),
+      fixedCosts: JSON.parse(JSON.stringify(fixedCosts))
+    });
+  }, [scenario]);
 
   const applyWhatIf = () => {
-    // Adjust priceTiers
-    setPriceTiers((prev) => prev.map(tier => ({ ...tier, price: Math.round(tier.price * (1 + whatIf.price / 100)) })));
-    // Adjust variableCosts
-    setVariableCosts((prev) => prev.map(v => ({ ...v, unitCost: Math.round(v.unitCost * (1 + whatIf.variable / 100)) })));
-    // Adjust fixedCosts
-    setFixedCosts((prev) => prev.map(f => ({ ...f, cost: Math.round(f.cost * (1 + whatIf.fixed / 100)) })));
+    if (!scenarioBaseValues) return;
+    
+    // Apply changes from scenario base values to prevent compounding
+    setPriceTiers(scenarioBaseValues.priceTiers.map(tier => ({ 
+      ...tier, 
+      price: Number((tier.price * (1 + whatIf.price / 100)).toFixed(2))
+    })));
+    
+    setVariableCosts(scenarioBaseValues.variableCosts.map(v => ({ 
+      ...v, 
+      unitCost: Number((v.unitCost * (1 + whatIf.variable / 100)).toFixed(2))
+    })));
+    
+    setFixedCosts(scenarioBaseValues.fixedCosts.map(f => ({ 
+      ...f, 
+      cost: Number((f.cost * (1 + whatIf.fixed / 100)).toFixed(2))
+    })));
   };
+
   const resetWhatIf = () => {
-    handleScenarioChange(scenario); // restore to scenario values
-    setWhatIf({ price: 0, variable: 0, fixed: 0 });
+    // Reset to current scenario's base values
+    if (scenarioBaseValues) {
+      setPriceTiers(JSON.parse(JSON.stringify(scenarioBaseValues.priceTiers)));
+      setVariableCosts(JSON.parse(JSON.stringify(scenarioBaseValues.variableCosts)));
+      setFixedCosts(JSON.parse(JSON.stringify(scenarioBaseValues.fixedCosts)));
+    }
+    
+    // Reset what-if values based on current scenario
+    if (scenario === 'base') {
+      setWhatIf({ price: 0, variable: 0, fixed: 0 });
+    } else if (scenario === 'optimistic') {
+      setWhatIf({ price: 0, variable: -5, fixed: -3 });
+    } else if (scenario === 'pessimistic') {
+      setWhatIf({ price: 0, variable: 7, fixed: 5 });
+    }
+  };
+
+  if (loading) {
   };
 
   if (loading) {
@@ -1067,22 +1161,19 @@ const EmpowerModel = () => {
           Break-even with Debt
         </button>
         <button
-          className={`px-4 py-3 ${activeTab === 'costs' ? 'text-blue-700 border-b-2 border-blue-700 font-medium' : 'text-gray-600'}`}
-          onClick={() => setActiveTab('costs')}
+          className={`px-4 py-3 ${activeTab === 'productCostAnalysis' ? 'text-blue-700 border-b-2 border-blue-700 font-medium' : 'text-gray-600'}`}
+          onClick={() => setActiveTab('productCostAnalysis')}
         >
-          Costs
+          Product Cost Analysis
         </button>
         <button
-          className={`px-4 py-3 ${activeTab === 'loans' ? 'text-blue-700 border-b-2 border-blue-700 font-medium' : 'text-gray-600'}`}
-          onClick={() => setActiveTab('loans')}
+          className={`px-4 py-3 ${activeTab === 'costing' ? 'text-blue-700 border-b-2 border-blue-700 font-medium' : 'text-gray-600'}`}
+          onClick={() => {
+            setActiveTab('costing');
+            setActiveSubTab('costs');
+          }}
         >
-          Loan Analysis
-        </button>
-        <button
-          className={`px-4 py-3 ${activeTab === 'statistics' ? 'text-blue-700 border-b-2 border-blue-700 font-medium' : 'text-gray-600'}`}
-          onClick={() => setActiveTab('statistics')}
-        >
-          Statistics
+          Costing
         </button>
       </div>
 
@@ -1190,7 +1281,7 @@ const EmpowerModel = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {modelData.years.map((year, index) => {
+                      {Array.from({ length: yearConfig.duration }, (_, i) => yearConfig.startYear + i).map((year, index) => {
                         const yearlyCapacityUsage = calculateYearlyCapacityUsage(year);
                         const monthlyVolume = modelData.capacity * (yearlyCapacityUsage / 100);
                         const annualVolume = monthlyVolume * 12;
@@ -1265,8 +1356,7 @@ const EmpowerModel = () => {
               <div className="space-y-3">
             {priceTiers.map((tier, index) => (
                   <div key={index} className="flex items-center gap-2">
-                    <input
-                      type="text"
+                    <select
                       value={tier.name}
                       onChange={(e) => {
                         const newTiers = [...priceTiers];
@@ -1274,7 +1364,11 @@ const EmpowerModel = () => {
                         setPriceTiers(newTiers);
                       }}
                       className="input text-sm flex-1"
-                    />
+                    >
+                      {AVAILABLE_PRODUCT_TIERS.map(name => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                    </select>
                   <input
                     type="text"
                     value={formatInputNumber(tier.price.toString())}
@@ -1489,6 +1583,11 @@ const EmpowerModel = () => {
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
+                {/* Explanatory Note under Financial Projections */}
+                <div className="mt-4 mb-6 p-3 bg-blue-50 border-l-4 border-blue-400 text-blue-900 rounded">
+                  <strong>Note:</strong> All figures on this dashboard include variable costs, fixed costs, loan payments, and other relevant expenses. 
+                  The financial metrics and projections reflect the full cost structure of your business.
+              </div>
               </div>
               {/* Cumulative Cash Flow Trend Chart */}
               <div className="card mt-8">
@@ -1514,11 +1613,11 @@ const EmpowerModel = () => {
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
-              </div>
+                      </div>
               {/* Explanatory Note under the graph */}
               <div className="mt-4 mb-8 p-3 bg-blue-50 border-l-4 border-blue-400 text-blue-900 rounded">
                 <strong>Note:</strong> All figures on this dashboard include variable costs, fixed costs, loan payments, and other relevant expenses. The financial metrics and projections reflect the full cost structure of your business.
-              </div>
+                      </div>
               {/* Break-even Analysis (Summary) with white background */}
               <div className="bg-white rounded shadow p-6 mt-8 mb-8">
                 {(() => {
@@ -1547,7 +1646,7 @@ const EmpowerModel = () => {
                   let breakEvenCapacity = null;
                   let effectiveVariableCostAtBE = null;
                   let contributionMarginAtBE = null;
-                  let step = Math.max(1, Math.floor(modelData.capacity / 200));
+                  let step = Math.max(1, Math.floor(modelData.capacity / 1000));
                   for (let v = 0; v <= modelData.capacity; v += step) {
                     const effectiveVC = calculateTotalVariableCost(v);
                     const revenue = v * weightedPrice;
@@ -1609,7 +1708,7 @@ const EmpowerModel = () => {
                           </div>
                           <div className="flex justify-between font-bold">
                             <span>Break-even Year:</span>
-                            <span>{breakEvenVolume !== null && breakEvenYear > 0 ? `${(yearConfig.startYear + breakEvenYear).toFixed(1)}` : 'Not Achieved'}</span>
+                            <span>{breakEvenVolume !== null && breakEvenYear > 0 ? Math.ceil(yearConfig.startYear + breakEvenYear) : 'Not Achieved'}</span>
                           </div>
                         </div>
                       </div>
@@ -1641,7 +1740,7 @@ const EmpowerModel = () => {
               <div className="card mb-8">
                 <h3 className="font-bold mb-4">Key Ratios <span className="text-xs text-gray-500">(Projection Period)</span></h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
+                      <div>
                     <div className="text-sm text-gray-500">Gross Margin %</div>
                     <div className="text-2xl font-bold">
                       {(() => {
@@ -1650,8 +1749,8 @@ const EmpowerModel = () => {
                         return totalRevenue > 0 ? ((totalRevenue - totalVariableCosts) / totalRevenue * 100).toFixed(1) + '%' : 'N/A';
                       })()}
                     </div>
-                  </div>
-                  <div>
+                      </div>
+                      <div>
                     <div className="text-sm text-gray-500">Operating Margin %</div>
                     <div className="text-2xl font-bold">
                       {(() => {
@@ -1659,9 +1758,9 @@ const EmpowerModel = () => {
                         const totalOperatingProfit = financialData.reduce((sum, year) => sum + year.operatingProfit, 0);
                         return totalRevenue > 0 ? (totalOperatingProfit / totalRevenue * 100).toFixed(1) + '%' : 'N/A';
                       })()}
+                      </div>
                     </div>
-                  </div>
-                  <div>
+                    <div>
                     <div className="text-sm text-gray-500">Debt Service Coverage Ratio (DSCR)</div>
                     <div className="text-2xl font-bold">
                       {(() => {
@@ -1680,10 +1779,10 @@ const EmpowerModel = () => {
                         })();
                         return totalLoanPayments > 0 ? (totalNetCashFlow / totalLoanPayments).toFixed(2) : 'N/A';
                       })()}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
               {/* Cost Driver Pie Chart by Product Tier */}
               <div className="card mb-8">
                 <h3 className="font-bold mb-4">Variable Cost Breakdown by Product Tier</h3>
@@ -1796,11 +1895,42 @@ const EmpowerModel = () => {
             </div>
           )}
 
-          {activeTab === 'costs' && (
+          {activeTab === 'costing' && (
+            <div className="space-y-6">
+              {/* Sub-tabs */}
+              <div className="border-b">
+                <div className="flex space-x-4">
+                  <button
+                    className={`px-4 py-2 ${activeSubTab === 'costs' ? 'text-blue-700 border-b-2 border-blue-700 font-medium' : 'text-gray-600'}`}
+                    onClick={() => setActiveSubTab('costs')}
+                  >
+                    Costs
+                  </button>
+                  <button
+                    className={`px-4 py-2 ${activeSubTab === 'loans' ? 'text-blue-700 border-b-2 border-blue-700 font-medium' : 'text-gray-600'}`}
+                    onClick={() => setActiveSubTab('loans')}
+                  >
+                    Loan Analysis
+                  </button>
+                  <button
+                    className={`px-4 py-2 ${activeSubTab === 'statistics' ? 'text-blue-700 border-b-2 border-blue-700 font-medium' : 'text-gray-600'}`}
+                    onClick={() => setActiveSubTab('statistics')}
+                  >
+                    Statistics
+                  </button>
+                </div>
+              </div>
+
+              {/* Sub-tab content */}
+              {activeSubTab === 'costs' && (
             <div key={modelVersion}>
               <div className="bg-white p-4 rounded shadow mb-6">
                 <h2 className="font-bold text-lg mb-4">Fixed Costs</h2>
-                <p className="text-sm text-gray-600 mb-4">Monthly fixed costs that don't vary with production volume.</p>
+                    
+                    {/* PP&E Section */}
+                    <div className="mb-8">
+                      <h3 className="font-semibold text-md mb-4 text-gray-700">Property, Plant, and Equipment (PP&E)</h3>
+                      <p className="text-sm text-gray-600 mb-4">Depreciation of physical assets and equipment.</p>
 
                 <div className="overflow-x-auto">
                   <table className="min-w-full bg-white">
@@ -1816,7 +1946,9 @@ const EmpowerModel = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {fixedCosts.map((item, index) => (
+                            {fixedCosts
+                              .filter(item => item.type === "depreciation")
+                              .map((item, index) => (
                         <tr key={index} className={index % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
                           <td className="py-2 px-4 border-b border-gray-200">
                             <input
@@ -1824,49 +1956,155 @@ const EmpowerModel = () => {
                               value={item.name}
                               onChange={(e) => {
                                 const newCosts = [...fixedCosts];
-                                newCosts[index].name = e.target.value;
+                                        const realIndex = fixedCosts.findIndex(cost => cost === item);
+                                        newCosts[realIndex].name = e.target.value;
                                 setFixedCosts(newCosts);
                               }}
-                              className="w-full border-none bg-transparent"
+                                      className="bg-transparent border-none w-full"
                             />
                           </td>
-                          <td className="py-2 px-4 border-b border-gray-200 text-right">
+                                  <td className="py-2 px-4 border-b border-gray-200">
                             <input
                               type="text"
-                              value={formatInputNumber(item.cost.toString())}
+                                      value={formatNumber(item.cost)}
                               onChange={(e) => {
                                 const newCosts = [...fixedCosts];
-                                newCosts[index].cost = parseFormattedNumber(e.target.value);
+                                        const realIndex = fixedCosts.findIndex(cost => cost === item);
+                                        newCosts[realIndex].cost = parseFormattedNumber(e.target.value);
                                 setFixedCosts(newCosts);
                               }}
-                              className="w-full text-right border-none bg-transparent"
+                                      className="bg-transparent border-none w-full text-right"
                             />
                           </td>
+                                  <td className="py-2 px-4 border-b border-gray-200 text-center">Depreciation</td>
+                                  <td className="py-2 px-4 border-b border-gray-200 text-center">Annual</td>
                           <td className="py-2 px-4 border-b border-gray-200 text-center">
-                            <select
-                              value={item.type || "regular"}
+                                    <input
+                                      type="number"
+                                      value={item.years || 0}
                               onChange={(e) => {
                                 const newCosts = [...fixedCosts];
-                                newCosts[index].type = e.target.value;
-                                if (e.target.value === "depreciation" && !newCosts[index].years) {
-                                  newCosts[index].years = 20;
-                                  newCosts[index].startYear = 2023;
-                                }
+                                        const realIndex = fixedCosts.findIndex(cost => cost === item);
+                                        newCosts[realIndex].years = parseInt(e.target.value);
                                 setFixedCosts(newCosts);
                               }}
-                              className="bg-transparent border-none"
-                            >
-                              <option value="regular">Regular</option>
-                              <option value="depreciation">Depreciation</option>
-                            </select>
+                                      className="w-16 text-center border rounded bg-transparent"
+                                      min="1"
+                                    />
+                                  </td>
+                                  <td className="py-2 px-4 border-b border-gray-200 text-right">
+                                    {((item.cost / (item.years || 1)) / 12).toLocaleString()}
+                                  </td>
+                                  <td className="py-2 px-4 border-b border-gray-200 text-center">
+                                    <button
+                                      onClick={() => {
+                                        const newCosts = fixedCosts.filter(cost => cost !== item);
+                                        setFixedCosts(newCosts);
+                                      }}
+                                      className="text-red-600 hover:text-red-800"
+                                    >
+                                      Delete
+                                    </button>
                           </td>
+                                </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr className="bg-blue-50">
+                              <td className="py-2 px-4 border-t border-gray-300 font-medium">Total PP&E Monthly Cost</td>
+                              <td></td>
+                              <td></td>
+                              <td></td>
+                              <td></td>
+                              <td className="py-2 px-4 border-t border-gray-300 text-right font-medium">
+                                {fixedCosts
+                                  .filter(item => item.type === "depreciation")
+                                  .reduce((sum, item) => sum + ((item.cost / (item.years || 1)) / 12), 0)
+                                  .toLocaleString()} THB
+                              </td>
+                              <td></td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+
+                      <div className="mt-4 flex justify-end">
+                        <button
+                          className="bg-blue-100 hover:bg-blue-200 text-blue-700 py-1 px-3 rounded text-sm"
+                          onClick={() => {
+                            setFixedCosts([...fixedCosts, {
+                              name: "New PP&E Item",
+                              cost: 0,
+                              annual: true,
+                              type: "depreciation",
+                              years: 20,
+                              startYear: new Date().getFullYear()
+                            }]);
+                          }}
+                        >
+                          + Add PP&E Item
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* SG&A Section */}
+                    <div className="mb-4">
+                      <h3 className="font-semibold text-md mb-4 text-gray-700">Selling, General, and Administrative (SG&A)</h3>
+                      <p className="text-sm text-gray-600 mb-4">Regular operational and administrative expenses.</p>
+
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full bg-white">
+                          <thead>
+                            <tr>
+                              <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cost Item</th>
+                              <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount (THB)</th>
+                              <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                              <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Period</th>
+                              <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Years</th>
+                              <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Monthly Equivalent</th>
+                              <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {fixedCosts
+                              .filter(item => item.type === "regular")
+                              .map((item, index) => (
+                                <tr key={index} className={index % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
+                                  <td className="py-2 px-4 border-b border-gray-200">
+                                    <input
+                                      type="text"
+                                      value={item.name}
+                                      onChange={(e) => {
+                                        const newCosts = [...fixedCosts];
+                                        const realIndex = fixedCosts.findIndex(cost => cost === item);
+                                        newCosts[realIndex].name = e.target.value;
+                                        setFixedCosts(newCosts);
+                                      }}
+                                      className="bg-transparent border-none w-full"
+                                    />
+                                  </td>
+                                  <td className="py-2 px-4 border-b border-gray-200">
+                                    <input
+                                      type="text"
+                                      value={formatNumber(item.cost)}
+                                      onChange={(e) => {
+                                        const newCosts = [...fixedCosts];
+                                        const realIndex = fixedCosts.findIndex(cost => cost === item);
+                                        newCosts[realIndex].cost = parseFormattedNumber(e.target.value);
+                                        setFixedCosts(newCosts);
+                                      }}
+                                      className="bg-transparent border-none w-full text-right"
+                                    />
+                                  </td>
+                                  <td className="py-2 px-4 border-b border-gray-200 text-center">Regular</td>
                           <td className="py-2 px-4 border-b border-gray-200 text-center">
                             <select
                               value={item.monthly ? "monthly" : "annual"}
                               onChange={(e) => {
                                 const newCosts = [...fixedCosts];
-                                newCosts[index].monthly = e.target.value === "monthly";
-                                newCosts[index].annual = e.target.value === "annual";
+                                        const realIndex = fixedCosts.findIndex(cost => cost === item);
+                                        newCosts[realIndex].monthly = e.target.value === "monthly";
+                                        newCosts[realIndex].annual = e.target.value === "annual";
                                 setFixedCosts(newCosts);
                               }}
                               className="bg-transparent border-none"
@@ -1875,28 +2113,14 @@ const EmpowerModel = () => {
                               <option value="annual">Annual</option>
                             </select>
                           </td>
-                          <td className="py-2 px-4 border-b border-gray-200 text-center">
-                            {item.type === "depreciation" ? (
-                              <input
-                                type="number"
-                                value={item.years || 0}
-                                onChange={(e) => {
-                                  const newCosts = [...fixedCosts];
-                                  newCosts[index].years = parseInt(e.target.value);
-                                  setFixedCosts(newCosts);
-                                }}
-                                className="w-16 text-center border rounded bg-transparent"
-                                min="1"
-                              />
-                            ) : "-"}
-                          </td>
+                                  <td className="py-2 px-4 border-b border-gray-200 text-center">-</td>
                           <td className="py-2 px-4 border-b border-gray-200 text-right">
                             {item.monthly ? item.cost.toLocaleString() : (item.cost / 12).toLocaleString()}
                           </td>
                           <td className="py-2 px-4 border-b border-gray-200 text-center">
                             <button
                               onClick={() => {
-                                const newCosts = fixedCosts.filter((_, i) => i !== index);
+                                        const newCosts = fixedCosts.filter(cost => cost !== item);
                                 setFixedCosts(newCosts);
                               }}
                               className="text-red-600 hover:text-red-800"
@@ -1909,14 +2133,18 @@ const EmpowerModel = () => {
                     </tbody>
                     <tfoot>
                       <tr className="bg-blue-50">
-                        <td className="py-2 px-4 border-t border-gray-300 font-medium">Total Monthly Fixed Costs</td>
+                              <td className="py-2 px-4 border-t border-gray-300 font-medium">Total SG&A Monthly Cost</td>
                         <td></td>
                         <td></td>
                         <td></td>
                         <td></td>
                         <td className="py-2 px-4 border-t border-gray-300 text-right font-medium">
-                          {metrics.monthlyFixedCost ? metrics.monthlyFixedCost.toLocaleString() : "0"} THB
+                                {fixedCosts
+                                  .filter(item => item.type === "regular")
+                                  .reduce((sum, item) => sum + (item.monthly ? item.cost : item.cost / 12), 0)
+                                  .toLocaleString()} THB
                         </td>
+                              <td></td>
                       </tr>
                     </tfoot>
                   </table>
@@ -1927,15 +2155,33 @@ const EmpowerModel = () => {
                     className="bg-blue-100 hover:bg-blue-200 text-blue-700 py-1 px-3 rounded text-sm"
                     onClick={() => {
                       setFixedCosts([...fixedCosts, {
-                        name: "New Cost Item",
+                              name: "New SG&A Item",
                         cost: 0,
                         monthly: true,
                         type: "regular"
                       }]);
                     }}
                   >
-                    + Add Cost Item
+                          + Add SG&A Item
                   </button>
+                      </div>
+                    </div>
+
+                    {/* Total Fixed Costs */}
+                    <div className="mt-8 p-4 bg-gray-50 rounded-lg">
+                      <div className="flex justify-between items-center">
+                        <span className="text-lg font-bold">Total Monthly Fixed Costs</span>
+                        <span className="text-lg font-bold">
+                          {fixedCosts.reduce((sum, item) => {
+                            const monthlyAmount = item.monthly 
+                              ? item.cost 
+                              : (item.type === "depreciation" 
+                                ? (item.cost / (item.years || 1)) / 12 
+                                : item.cost / 12);
+                            return sum + monthlyAmount;
+                          }, 0).toLocaleString()} THB
+                        </span>
+                      </div>
                 </div>
               </div>
 
@@ -1943,239 +2189,572 @@ const EmpowerModel = () => {
                 <h2 className="font-bold text-lg mb-4">Variable Costs</h2>
                 <p className="text-sm text-gray-600 mb-4">Costs that vary with production volume, specified per ton.</p>
 
+                    {/* Add tabs for different views */}
+                    <div className="border-b mb-4">
+                      <div className="flex space-x-4">
+                        <button
+                          className={`px-4 py-2 ${activeProductTier === 'all' ? 'text-blue-700 border-b-2 border-blue-700 font-medium' : 'text-gray-600'}`}
+                          onClick={() => setActiveProductTier('all')}
+                        >
+                          All Costs
+                        </button>
+                        {priceTiers.map(tier => (
+                          <button
+                            key={tier.name}
+                            className={`px-4 py-2 ${activeProductTier === tier.name ? 'text-blue-700 border-b-2 border-blue-700 font-medium' : 'text-gray-600'}`}
+                            onClick={() => setActiveProductTier(tier.name)}
+                          >
+                            {tier.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Quick Add Section */}
+                    <div className="mb-6 p-4 bg-blue-50 rounded-lg">
+                      <div className="flex items-center gap-4">
+                        <input
+                          type="text"
+                          placeholder="Cost Item Name"
+                          className="input flex-1"
+                          id="newCostName"
+                        />
+                        <input
+                          type="number"
+                          placeholder="Unit Cost"
+                          className="input w-32"
+                          id="newCostAmount"
+                        />
+                        <select
+                          className="input w-40"
+                          id="newCostTier"
+                        >
+                          <option value="all">All Products</option>
+                          {priceTiers.map(tier => (
+                            <option key={tier.name} value={tier.name}>{tier.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          className="btn btn-primary"
+                          onClick={() => {
+                            const name = (document.getElementById('newCostName') as HTMLInputElement).value;
+                            const cost = parseFloat((document.getElementById('newCostAmount') as HTMLInputElement).value);
+                            const tier = (document.getElementById('newCostTier') as HTMLSelectElement).value;
+                            
+                            if (name && !isNaN(cost)) {
+                              const newCost = {
+                                name,
+                                unitCost: cost,
+                                volumeReduction: 0,
+                                ...(tier === 'all' ? { all: true } : { tier })
+                              };
+                              setVariableCosts([...variableCosts, newCost]);
+                              
+                              // Reset inputs
+                              (document.getElementById('newCostName') as HTMLInputElement).value = '';
+                              (document.getElementById('newCostAmount') as HTMLInputElement).value = '';
+                              (document.getElementById('newCostTier') as HTMLSelectElement).value = 'all';
+                            }
+                          }}
+                        >
+                          + Add Cost
+                        </button>
+                      </div>
+                    </div>
+
                 <div className="overflow-x-auto">
-                  <table className="min-w-full bg-white">
+                      <table className="min-w-full">
                     <thead>
                       <tr>
                         <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cost Item</th>
-                        <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Base Unit Cost (THB/ton)</th>
-                        <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Volume Reduction (% per 1000 tons)</th>
-                        <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Effective Cost (THB/ton)</th>
-                        <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Applies To</th>
+                            <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Base Cost (THB/ton)</th>
+                            <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Volume Reduction (%/1000t)</th>
+                            <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Effective Cost</th>
+                            <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Product Tier</th>
                         <th className="py-2 px-4 border-b border-gray-200 bg-gray-50 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {variableCosts.map((item, index) => {
-                        const monthlyVolume = modelData.capacity * (capacityUsage / 100);
-                        const effectiveCost = calculateEffectiveVariableCost(item, monthlyVolume);
-                        
-                        return (
-                          <tr key={index} className={index % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
-                            <td className="py-2 px-4 border-b border-gray-200">
-                              <input
-                                type="text"
-                                value={item.name}
-                                onChange={(e) => {
-                                  const newCosts = [...variableCosts];
-                                  newCosts[index].name = e.target.value;
-                                  setVariableCosts(newCosts);
-                                }}
-                                className="w-full border-none bg-transparent"
-                              />
-                            </td>
-                            <td className="py-2 px-4 border-b border-gray-200 text-right">
-                              <input
-                                type="text"
-                                value={formatInputNumber(item.unitCost.toString())}
-                                onChange={(e) => {
-                                  const newCosts = [...variableCosts];
-                                  newCosts[index].unitCost = parseFormattedNumber(e.target.value);
-                                  setVariableCosts(newCosts);
-                                }}
-                                className="w-full text-right border-none bg-transparent"
-                              />
-                            </td>
-                            <td className="py-2 px-4 border-b border-gray-200 text-right">
-                              <input
-                                type="number"
-                                step="0.1"
-                                min="0"
-                                max="100"
-                                value={item.volumeReduction || 0}
-                                onChange={(e) => {
-                                  const newCosts = [...variableCosts];
-                                  newCosts[index].volumeReduction = parseFloat(e.target.value);
-                                  setVariableCosts(newCosts);
-                                }}
-                                className="w-full text-right border-none bg-transparent"
-                              />
-                            </td>
-                            <td className="py-2 px-4 border-b border-gray-200 text-right">
-                              {formatNumber(effectiveCost)}
-                            </td>
-                            <td className="py-2 px-4 border-b border-gray-200 text-center">
-                              <select
-                                value={item.all ? "all" : item.tier}
-                                onChange={(e) => {
-                                  const newCosts = [...variableCosts];
-                                  if (e.target.value === "all") {
-                                    newCosts[index].all = true;
-                                    delete newCosts[index].tier;
-                                  } else {
-                                    newCosts[index].all = false;
-                                    newCosts[index].tier = e.target.value;
-                                  }
-                                  setVariableCosts(newCosts);
-                                }}
-                                className="bg-transparent border-none"
-                              >
-                                <option value="all">All Products</option>
-                                {priceTiers.map(tier => (
-                                  <option key={tier.name} value={tier.name}>{tier.name}</option>
-                                ))}
-                              </select>
-                            </td>
-                            <td className="py-2 px-4 border-b border-gray-200 text-center">
-                              <button
-                                onClick={() => {
-                                  const newCosts = variableCosts.filter((_, i) => i !== index);
-                                  setVariableCosts(newCosts);
-                                }}
-                                className="text-red-600 hover:text-red-800"
-                              >
-                                Delete
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
+                          {variableCosts
+                            .filter(item => 
+                              activeProductTier === 'all' 
+                                ? item.all // Only show universal costs in All Costs tab
+                                : (item.tier === activeProductTier || item.all) // Show both specific and universal costs in product tabs
+                            )
+                            .map((item, index) => {
+                            const monthlyVolume = modelData.capacity * (capacityUsage / 100);
+                            const effectiveCost = calculateEffectiveVariableCost(item, monthlyVolume);
+                            
+                            return (
+                        <tr key={index} className={index % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
+                          <td className="py-2 px-4 border-b border-gray-200">
+                            <input
+                              type="text"
+                              value={item.name}
+                              onChange={(e) => {
+                                const newCosts = [...variableCosts];
+                                    const actualIndex = variableCosts.findIndex(cost => cost === item);
+                                    newCosts[actualIndex].name = e.target.value;
+                                setVariableCosts(newCosts);
+                              }}
+                              className="w-full border-none bg-transparent"
+                            />
+                          </td>
+                          <td className="py-2 px-4 border-b border-gray-200 text-right">
+                            <input
+                              type="text"
+                              value={formatInputNumber(item.unitCost.toString())}
+                              onChange={(e) => {
+                                const newCosts = [...variableCosts];
+                                    const actualIndex = variableCosts.findIndex(cost => cost === item);
+                                    newCosts[actualIndex].unitCost = parseFormattedNumber(e.target.value);
+                                setVariableCosts(newCosts);
+                              }}
+                              className="w-full text-right border-none bg-transparent"
+                            />
+                          </td>
+                              <td className="py-2 px-4 border-b border-gray-200 text-right">
+                                <input
+                                  type="number"
+                                  step="0.1"
+                                  min="0"
+                                  max="100"
+                                  value={item.volumeReduction || 0}
+                                  onChange={(e) => {
+                                    const newCosts = [...variableCosts];
+                                    const actualIndex = variableCosts.findIndex(cost => cost === item);
+                                    newCosts[actualIndex].volumeReduction = parseFloat(e.target.value);
+                                    setVariableCosts(newCosts);
+                                  }}
+                                  className="w-full text-right border-none bg-transparent"
+                                />
+                              </td>
+                              <td className="py-2 px-4 border-b border-gray-200 text-right">
+                                {formatNumber(effectiveCost)}
+                              </td>
+                          <td className="py-2 px-4 border-b border-gray-200 text-center">
+                            <select
+                              value={item.all ? "all" : item.tier}
+                              onChange={(e) => {
+                                const newCosts = [...variableCosts];
+                                    const actualIndex = variableCosts.findIndex(cost => cost === item);
+                                if (e.target.value === "all") {
+                                      newCosts[actualIndex].all = true;
+                                      delete newCosts[actualIndex].tier;
+                                } else {
+                                      newCosts[actualIndex].all = false;
+                                      newCosts[actualIndex].tier = e.target.value;
+                                }
+                                setVariableCosts(newCosts);
+                              }}
+                              className="bg-transparent border-none"
+                            >
+                              <option value="all">All Products</option>
+                              {priceTiers.map(tier => (
+                                <option key={tier.name} value={tier.name}>{tier.name}</option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="py-2 px-4 border-b border-gray-200 text-center">
+                            <button
+                              onClick={() => {
+                                    const actualIndex = variableCosts.findIndex(cost => cost === item);
+                                    const newCosts = variableCosts.filter((_, i) => i !== actualIndex);
+                                setVariableCosts(newCosts);
+                              }}
+                              className="text-red-600 hover:text-red-800"
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                            );
+                          })}
                     </tbody>
-                    <tfoot>
-                      <tr className="bg-blue-50">
-                        <td className="py-2 px-4 border-t border-gray-300 font-medium">Weighted Variable Cost</td>
-                        <td className="py-2 px-4 border-t border-gray-300 text-right font-medium">
-                          {/* Weighted Base Unit Cost */}
-                          {(() => {
-                            // Weighted by product mix (for tiered) or equally for 'all'
-                            const totalPercentage = priceTiers.reduce((sum, tier) => sum + tier.percentage, 0);
-                            let weightedBase = 0;
-                            variableCosts.forEach(item => {
-                              if (item.all) {
-                                weightedBase += item.unitCost;
-                              } else {
-                                const tier = priceTiers.find(t => t.name === item.tier);
-                                if (tier) weightedBase += item.unitCost * (tier.percentage / totalPercentage);
-                              }
-                            });
-                            return weightedBase ? weightedBase.toLocaleString() : "0";
-                          })()} THB/ton
-                        </td>
-                        <td></td>
-                        <td className="py-2 px-4 border-t border-gray-300 text-right font-medium">
-                          {/* Weighted Effective Cost */}
-                          {(() => {
-                            const totalPercentage = priceTiers.reduce((sum, tier) => sum + tier.percentage, 0);
-                            let weightedEff = 0;
-                            const monthlyVolume = modelData.capacity * (capacityUsage / 100);
-                            variableCosts.forEach(item => {
-                              const eff = calculateEffectiveVariableCost(item, monthlyVolume);
-                              if (item.all) {
-                                weightedEff += eff;
-                              } else {
-                                const tier = priceTiers.find(t => t.name === item.tier);
-                                if (tier) weightedEff += eff * (tier.percentage / totalPercentage);
-                              }
-                            });
-                            return weightedEff ? weightedEff.toLocaleString() : "0";
-                          })()} THB/ton
-                        </td>
-                        <td></td>
-                      </tr>
-                      <tr className="bg-green-50">
-                        <td className="py-2 px-4 border-t border-gray-300 font-medium">Contribution Margin</td>
-                        <td className="py-2 px-4 border-t border-gray-300 text-right font-medium">
-                          {/* Margin for Base Unit Cost */}
-                          {(() => {
-                            const totalPercentage = priceTiers.reduce((sum, tier) => sum + tier.percentage, 0);
-                            let weightedBase = 0;
-                            variableCosts.forEach(item => {
-                              if (item.all) {
-                                weightedBase += item.unitCost;
-                              } else {
-                                const tier = priceTiers.find(t => t.name === item.tier);
-                                if (tier) weightedBase += item.unitCost * (tier.percentage / totalPercentage);
-                              }
-                            });
-                            const weightedPrice = priceTiers.reduce((sum, tier) => sum + (tier.price * (tier.percentage / 100)), 0);
-                            const margin = weightedPrice - weightedBase;
-                            return margin ? margin.toLocaleString() : "0";
-                          })()} THB/ton
-                        </td>
-                        <td className="py-2 px-4 border-t border-gray-300 text-center font-medium">
-                          {/* Margin % for Base Unit Cost */}
-                          {(() => {
-                            const totalPercentage = priceTiers.reduce((sum, tier) => sum + tier.percentage, 0);
-                            let weightedBase = 0;
-                            variableCosts.forEach(item => {
-                              if (item.all) {
-                                weightedBase += item.unitCost;
-                              } else {
-                                const tier = priceTiers.find(t => t.name === item.tier);
-                                if (tier) weightedBase += item.unitCost * (tier.percentage / totalPercentage);
-                              }
-                            });
-                            const weightedPrice = priceTiers.reduce((sum, tier) => sum + (tier.price * (tier.percentage / 100)), 0);
-                            const margin = weightedPrice - weightedBase;
-                            return weightedPrice ? ((margin / weightedPrice) * 100).toFixed(1) + '%' : '0%';
-                          })()}
-                        </td>
-                        <td className="py-2 px-4 border-t border-gray-300 text-right font-medium">
-                          {/* Margin for Effective Cost */}
-                          {(() => {
-                            const totalPercentage = priceTiers.reduce((sum, tier) => sum + tier.percentage, 0);
-                            let weightedEff = 0;
-                            const monthlyVolume = modelData.capacity * (capacityUsage / 100);
-                            variableCosts.forEach(item => {
-                              const eff = calculateEffectiveVariableCost(item, monthlyVolume);
-                              if (item.all) {
-                                weightedEff += eff;
-                              } else {
-                                const tier = priceTiers.find(t => t.name === item.tier);
-                                if (tier) weightedEff += eff * (tier.percentage / totalPercentage);
-                              }
-                            });
-                            const weightedPrice = priceTiers.reduce((sum, tier) => sum + (tier.price * (tier.percentage / 100)), 0);
-                            const margin = weightedPrice - weightedEff;
-                            return margin ? margin.toLocaleString() : "0";
-                          })()} THB/ton
-                        </td>
-                        <td className="py-2 px-4 border-t border-gray-300 text-center font-medium">
-                          {/* Margin % for Effective Cost */}
-                          {(() => {
-                            const totalPercentage = priceTiers.reduce((sum, tier) => sum + tier.percentage, 0);
-                            let weightedEff = 0;
-                            const monthlyVolume = modelData.capacity * (capacityUsage / 100);
-                            variableCosts.forEach(item => {
-                              const eff = calculateEffectiveVariableCost(item, monthlyVolume);
-                              if (item.all) {
-                                weightedEff += eff;
-                              } else {
-                                const tier = priceTiers.find(t => t.name === item.tier);
-                                if (tier) weightedEff += eff * (tier.percentage / totalPercentage);
-                              }
-                            });
-                            const weightedPrice = priceTiers.reduce((sum, tier) => sum + (tier.price * (tier.percentage / 100)), 0);
-                            const margin = weightedPrice - weightedEff;
-                            return weightedPrice ? ((margin / weightedPrice) * 100).toFixed(1) + '%' : '0%';
-                          })()}
-                        </td>
-                      </tr>
-                    </tfoot>
                   </table>
                 </div>
 
+                    {/* Cost Summary for Selected Tab */}
+                    {activeProductTier !== 'all' && (
+                      <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+                        <h3 className="font-bold mb-4">{activeProductTier} Cost Summary</h3>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <div className="text-sm text-gray-600">Total Variable Cost per Ton</div>
+                            <div className="text-xl font-semibold">
+                              {(() => {
+                                const monthlyVolume = modelData.capacity * (capacityUsage / 100);
+                                const tierCosts = variableCosts
+                                  .filter(cost => cost.tier === activeProductTier || cost.all)
+                                  .reduce((sum, cost) => sum + calculateEffectiveVariableCost(cost, monthlyVolume), 0);
+                                return formatNumber(tierCosts);
+                              })()} THB
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-sm text-gray-600">Contribution Margin per Ton</div>
+                            <div className="text-xl font-semibold">
+                              {(() => {
+                                const monthlyVolume = modelData.capacity * (capacityUsage / 100);
+                                const tierCosts = variableCosts
+                                  .filter(cost => cost.tier === activeProductTier || cost.all)
+                                  .reduce((sum, cost) => sum + calculateEffectiveVariableCost(cost, monthlyVolume), 0);
+                                const price = priceTiers.find(tier => tier.name === activeProductTier)?.price || 0;
+                                return formatNumber(price - tierCosts);
+                              })()} THB
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-sm text-gray-600">Margin %</div>
+                            <div className="text-xl font-semibold">
+                              {(() => {
+                                const monthlyVolume = modelData.capacity * (capacityUsage / 100);
+                                const tierCosts = variableCosts
+                                  .filter(cost => cost.tier === activeProductTier || cost.all)
+                                  .reduce((sum, cost) => sum + calculateEffectiveVariableCost(cost, monthlyVolume), 0);
+                                const price = priceTiers.find(tier => tier.name === activeProductTier)?.price || 0;
+                                return price ? ((price - tierCosts) / price * 100).toFixed(1) + '%' : '0%';
+                              })()}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-sm text-gray-600">Monthly Volume</div>
+                            <div className="text-xl font-semibold">
+                              {(() => {
+                                const tier = priceTiers.find(t => t.name === activeProductTier);
+                                if (!tier) return '0';
+                                const monthlyVolume = modelData.capacity * (capacityUsage / 100);
+                                return formatNumber(monthlyVolume * (tier.percentage / 100));
+                              })()} tons
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {activeSubTab === 'loans' && (
+                <div className="space-y-6">
+                  <div className="card">
+                    <div className="flex justify-between items-center mb-6">
+                      <h2 className="text-xl font-bold">Loan Configuration</h2>
+                      <button 
+                        className="btn btn-primary"
+                        onClick={() => setLoans([...loans, {
+                          name: "New Loan",
+                          amount: 0,
+                          bank: "",
+                          interestRate: 5.0,
+                          term: 60,
+                          startDate: new Date().toISOString().slice(0, 7),
+                          type: "other"
+                        }])}
+                      >
+                        + Add Loan
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-6">
+                      {loans.map((loan, index) => (
+                        <div key={index} className="border rounded-lg p-4 bg-gray-50">
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {/* Loan Name */}
+                    <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">
+                                Loan Name
+                              </label>
+                              <input
+                                type="text"
+                                value={loan.name}
+                                onChange={(e) => {
+                                  const newLoans = [...loans];
+                                  newLoans[index].name = e.target.value;
+                                  setLoans(newLoans);
+                                }}
+                                className="input"
+                              />
+                    </div>
+
+                            {/* Amount */}
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">
+                                Amount (THB)
+                              </label>
+                              <input
+                                type="text"
+                                value={formatInputNumber(loan.amount.toString())}
+                                onChange={(e) => {
+                                  const newLoans = [...loans];
+                                  newLoans[index].amount = parseFormattedNumber(e.target.value);
+                                  setLoans(newLoans);
+                                }}
+                                className="input"
+                              />
+                  </div>
+
+                            {/* Bank */}
+                    <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">
+                                Bank
+                              </label>
+                              <input
+                                type="text"
+                                value={loan.bank}
+                                onChange={(e) => {
+                                  const newLoans = [...loans];
+                                  newLoans[index].bank = e.target.value;
+                                  setLoans(newLoans);
+                                }}
+                                className="input"
+                              />
+                    </div>
+
+                            {/* Interest Rate */}
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">
+                                Interest Rate (%)
+                              </label>
+                              <input
+                                type="number"
+                                step="0.1"
+                                value={loan.interestRate}
+                                onChange={(e) => {
+                                  const newLoans = [...loans];
+                                  newLoans[index].interestRate = parseFloat(e.target.value);
+                                  setLoans(newLoans);
+                                }}
+                                className="input"
+                              />
+                  </div>
+
+                            {/* Term */}
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">
+                                Term (months)
+                              </label>
+                              <input
+                                type="number"
+                                value={loan.term}
+                                onChange={(e) => {
+                                  const newLoans = [...loans];
+                                  newLoans[index].term = parseInt(e.target.value);
+                                  setLoans(newLoans);
+                                }}
+                                className="input"
+                              />
+                  </div>
+
+                            {/* Start Date */}
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">
+                                Start Date
+                              </label>
+                              <input
+                                type="month"
+                                value={loan.startDate}
+                                onChange={(e) => {
+                                  const newLoans = [...loans];
+                                  newLoans[index].startDate = e.target.value;
+                                  setLoans(newLoans);
+                                }}
+                                className="input"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Loan Summary */}
+                          <div className="mt-4 pt-4 border-t grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                              <div className="text-sm text-gray-500">Monthly Payment</div>
+                              <div className="text-lg font-semibold">
+                                {formatNumber(calculateMonthlyPayment(loan.amount, loan.interestRate, loan.term))} THB
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-sm text-gray-500">Total Interest</div>
+                              <div className="text-lg font-semibold">
+                                {formatNumber(calculateTotalInterest(loan.amount, loan.interestRate, loan.term))} THB
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-sm text-gray-500">Total Payment</div>
+                              <div className="text-lg font-semibold">
+                                {(loan.amount + calculateTotalInterest(loan.amount, loan.interestRate, loan.term)).toLocaleString()} THB
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Delete Button */}
                 <div className="mt-4 flex justify-end">
                   <button
-                    className="bg-blue-100 hover:bg-blue-200 text-blue-700 py-1 px-3 rounded text-sm"
+                              className="text-red-600 hover:text-red-800"
                     onClick={() => {
-                      setVariableCosts([...variableCosts, { name: "New Variable Cost", unitCost: 0, all: true, volumeReduction: 0 }]);
+                                const newLoans = loans.filter((_, i) => i !== index);
+                                setLoans(newLoans);
                     }}
                   >
-                    + Add Variable Cost
+                              Delete
                   </button>
                 </div>
               </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Amortization Schedule */}
+                  <div className="card">
+                    <h3 className="text-lg font-bold mb-4">Combined Loan Payment Schedule</h3>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full">
+                        <thead>
+                          <tr>
+                            <th className="table-header">Year</th>
+                            <th className="table-header text-right">Principal Payment</th>
+                            <th className="table-header text-right">Interest Payment</th>
+                            <th className="table-header text-right">Total Payment</th>
+                            <th className="table-header text-right">Remaining Balance</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {generateAmortizationSchedule(loans).map((year, index) => (
+                            <tr key={index} className="border-b">
+                              <td className="table-cell">{year.year}</td>
+                              <td className="table-cell text-right">{formatNumber(year.principal)}</td>
+                              <td className="table-cell text-right">{formatNumber(year.interest)}</td>
+                              <td className="table-cell text-right">{formatNumber(year.totalPayment)}</td>
+                              <td className="table-cell text-right">{formatNumber(year.remainingBalance)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeSubTab === 'statistics' && (
+                <div className="p-4">
+                  <h2 className="text-xl font-bold mb-6">Financial Metrics Calculation Methods</h2>
+                  
+                  <div className="space-y-6">
+                    {/* NPV Section */}
+                    <div className="card">
+                      <h3 className="text-lg font-bold mb-4">Net Present Value (NPV)</h3>
+                      <div className="space-y-4">
+                        <p className="text-gray-600">
+                          NPV is calculated by discounting all future cash flows to present value using a 10% discount rate:
+                        </p>
+                        <div className="bg-gray-50 p-4 rounded-lg">
+                          <pre className="text-sm">
+                            NPV = -Initial Investment + Σ(Cash Flow_t / (1 + r)^t)
+                            where:
+                            - t = year number (0 to {yearConfig.duration - 1})
+                            - r = discount rate (10%)
+                            - Cash Flow_t = Operating Profit + Depreciation
+                          </pre>
+                        </div>
+                        <p className="text-gray-600">
+                          Current NPV: {formatNumber(metrics.npv)} M THB
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* IRR Section */}
+                    <div className="card">
+                      <h3 className="text-lg font-bold mb-4">Internal Rate of Return (IRR)</h3>
+                      <div className="space-y-4">
+                        <p className="text-gray-600">
+                          IRR is the discount rate that makes NPV equal to zero, calculated using binary search method:
+                        </p>
+                        <div className="bg-gray-50 p-4 rounded-lg">
+                          <pre className="text-sm">
+                            0 = -Initial Investment + Σ(Cash Flow_t / (1 + IRR)^t)
+                            where:
+                            - t = year number (0 to {irrTimeframe - 1})
+                            - Cash flows include initial investment and operating cash flows
+                          </pre>
+                        </div>
+                        <p className="text-gray-600">
+                          Current IRR ({irrTimeframe}-year): {metrics.irr ? `${formatNumber(metrics.irr)}%` : 'Not Calculable'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Payback Period Section */}
+                    <div className="card">
+                      <h3 className="text-lg font-bold mb-4">Payback Period</h3>
+                      <div className="space-y-4">
+                        <p className="text-gray-600">
+                          Time required to recover the initial investment through cumulative cash flows:
+                        </p>
+                        <div className="bg-gray-50 p-4 rounded-lg">
+                          <pre className="text-sm">
+                            Payback Period = Year + (Remaining Investment / Cash Flow in Following Year)
+                            where:
+                            - Year = Last year with negative cumulative cash flow
+                            - Remaining Investment = Absolute value of cumulative cash flow at that year
+                            - Following Year Cash Flow = Cash flow in the next year
+                          </pre>
+                        </div>
+                        <p className="text-gray-600">
+                          Current Payback Period: {metrics.paybackPeriod ? `${formatNumber(metrics.paybackPeriod)} years` : 'No Payback'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Break-even Analysis Section */}
+                    <div className="card">
+                      <h3 className="text-lg font-bold mb-4">Break-even Analysis</h3>
+                      <div className="space-y-4">
+                        <p className="text-gray-600">
+                          Calculation of volume and capacity required to cover fixed costs:
+                        </p>
+                        <div className="bg-gray-50 p-4 rounded-lg">
+                          <pre className="text-sm">
+                            Break-even Volume = Monthly Fixed Costs / Contribution Margin per Unit
+                            where:
+                            - Monthly Fixed Costs = {formatNumber(metrics.monthlyFixedCost)} THB
+                            - Contribution Margin = Price - Variable Cost = {formatNumber(metrics.contributionMargin)} THB/ton
+                            
+                            Break-even Capacity = (Break-even Volume / Monthly Capacity) × 100
+                            where:
+                            - Monthly Capacity = {formatNumber(modelData.capacity)} tons
+                          </pre>
+                        </div>
+                        <p className="text-gray-600">
+                          Current Break-even Volume: {formatNumber(metrics.breakEvenVolume)} tons/month
+                          <br />
+                          Current Break-even Capacity: {formatNumber(metrics.breakEvenCapacity)}%
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Operating Metrics Section */}
+                    <div className="card">
+                      <h3 className="text-lg font-bold mb-4">Operating Metrics</h3>
+                      <div className="space-y-4">
+                        <p className="text-gray-600">
+                          Key operating metrics calculations:
+                        </p>
+                        <div className="bg-gray-50 p-4 rounded-lg">
+                          <pre className="text-sm">
+                            Revenue = Monthly Volume × 12 × Weighted Price × (1 + Price Growth)^Year
+                            
+                            Operating Profit = Revenue - Variable Costs - Fixed Costs
+                            
+                            Net Cash Flow = Operating Profit + Depreciation - Initial Investment (Year 1 only)
+                            
+                            Weighted Price = Σ(Product Price × Sales Mix %)
+                            Current: {formatNumber(metrics.weightedPrice)} THB/ton
+                          </pre>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -2280,6 +2859,22 @@ const EmpowerModel = () => {
                     />
                   </LineChart>
                 </ResponsiveContainer>
+              </div>
+              <ResponsiveContainer width="100%" height={400}>
+                <LineChart data={financialData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="year" />
+                  <YAxis />
+                  <Tooltip formatter={(value: number) => formatNumber(value)} />
+                  <Legend />
+                  <Line type="monotone" dataKey="revenue" name="Revenue (M THB)" stroke="#2563eb" dot={false} />
+                  <Line type="monotone" dataKey="operatingProfit" name="Operating Profit (M THB)" stroke="#16a34a" dot={false} />
+                  <Line type="monotone" dataKey="netCashFlow" name="Net Cash Flow (M THB)" stroke="#7c3aed" dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+              <div className="text-sm text-gray-600 mt-4 mb-6 text-center">
+                Note: All figures on this dashboard include variable costs, fixed costs, loan payments, and other relevant expenses. 
+                The financial metrics and projections reflect the full cost structure of your business.
               </div>
             </div>
           )}
@@ -2670,11 +3265,7 @@ const EmpowerModel = () => {
               {/* Dynamic break-even calculation (first positive profit) */}
               {(() => {
                 const weightedPrice = priceTiers.reduce((sum, tier) => sum + (tier.price * (tier.percentage / 100)), 0);
-                const monthlyFixedCost = fixedCosts.reduce((sum, item) => {
-                  if (item.monthly) return sum + item.cost;
-                  if (item.annual) return sum + (item.cost / 12);
-                  return sum;
-                }, 0);
+                const monthlyFixedCost = calculateMonthlyFixedCost(fixedCosts);
                 const calculateTotalVariableCost = (volume: number) => {
                   return variableCosts.reduce((sum, cost) => {
                     const effectiveUnitCost = calculateEffectiveVariableCost(cost, volume);
@@ -2694,14 +3285,15 @@ const EmpowerModel = () => {
                 let breakEvenCapacity = null;
                 let effectiveVariableCostAtBE = null;
                 let contributionMarginAtBE = null;
-                let step = Math.max(1, Math.floor(modelData.capacity / 200));
+                let step = Math.max(1, Math.floor(modelData.capacity / 2000)); // More precise step size
                 for (let v = 0; v <= modelData.capacity; v += step) {
                   const effectiveVC = calculateTotalVariableCost(v);
                   const revenue = v * weightedPrice;
                   const variableCosts = v * effectiveVC;
                   const contribution = revenue - variableCosts;
                   const profit = contribution - monthlyFixedCost;
-                  if (profit > 0) {
+                  
+                  if (profit >= 0) {
                     breakEvenVolume = v;
                     breakEvenProfit = profit;
                     breakEvenCapacity = (v / modelData.capacity) * 100;
@@ -2729,83 +3321,83 @@ const EmpowerModel = () => {
                 }
                 return (
                   <>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                      <div className="border rounded p-4">
-                        <h3 className="font-medium text-lg mb-3">Break-even Summary</h3>
-                        <div className="space-y-3">
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Monthly Fixed Costs:</span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <div className="border rounded p-4">
+                  <h3 className="font-medium text-lg mb-3">Break-even Summary</h3>
+                  <div className="space-y-3">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Monthly Fixed Costs:</span>
                             <span className="font-medium">{formatNumber(monthlyFixedCost)} THB</span>
-                          </div>
-                          <div className="flex justify-between">
+                    </div>
+                    <div className="flex justify-between">
                             <span className="text-gray-600">Variable Cost per Ton (at BE):</span>
                             <span className="font-medium">{breakEvenVolume !== null ? formatNumber(effectiveVariableCostAtBE ?? 0) : 'N/A'} THB</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Average Price per Ton:</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Average Price per Ton:</span>
                             <span className="font-medium">{formatNumber(weightedPrice)} THB</span>
-                          </div>
-                          <div className="flex justify-between">
+                    </div>
+                    <div className="flex justify-between">
                             <span className="text-gray-600">Contribution Margin per Ton (at BE):</span>
                             <span className="font-medium">{breakEvenVolume !== null ? formatNumber(contributionMarginAtBE ?? 0) : 'N/A'} THB</span>
-                          </div>
-                          <div className="border-t pt-2 flex justify-between font-bold">
-                            <span>Break-even Volume:</span>
-                            <span>{breakEvenVolume !== null ? (breakEvenVolume as number).toFixed(1) + ' tons/month' : 'Not Achieved'}</span>
-                          </div>
-                          <div className="flex justify-between font-bold">
-                            <span>Break-even Capacity Utilization:</span>
-                            <span>{breakEvenVolume !== null && breakEvenCapacity !== null ? breakEvenCapacity.toFixed(1) + '%' : 'Not Achieved'}</span>
-                          </div>
-                          <div className="flex justify-between font-bold">
-                            <span>Break-even Year:</span>
-                            <span>{breakEvenVolume !== null && breakEvenYear > 0 ? `${(yearConfig.startYear + breakEvenYear).toFixed(1)}` : 'Not Achieved'}</span>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="border rounded p-4">
-                        <h3 className="font-medium text-lg mb-3">Margin of Safety</h3>
-                        <div className="space-y-3">
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Current Monthly Volume:</span>
-                            <span className="font-medium">{(modelData.capacity * (capacityUsage / 100)).toFixed(0)} tons</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Break-even Volume:</span>
-                            <span className="font-medium">{breakEvenVolume !== null ? (breakEvenVolume as number).toFixed(0) : 'N/A'} tons</span>
-                          </div>
-                          <div className="flex justify-between font-bold">
-                            <span>Safety Margin (Volume):</span>
-                            <span>{breakEvenVolume !== null ? ((modelData.capacity * (capacityUsage / 100)) - (breakEvenVolume as number)).toFixed(0) : 'N/A'} tons</span>
-                          </div>
-                          <div className="flex justify-between font-bold">
-                            <span>Safety Margin (%):</span>
-                            <span>{breakEvenVolume !== null ? (100 * ((modelData.capacity * (capacityUsage / 100)) - (breakEvenVolume as number)) / (modelData.capacity * (capacityUsage / 100))).toFixed(1) : 'N/A'}%</span>
-                          </div>
-                        </div>
-                      </div>
                     </div>
-                    <div className="mb-6">
-                      <h3 className="font-medium text-lg mb-3">Break-even Sensitivity Analysis</h3>
-                      <p className="text-sm text-gray-600 mb-4">
+                    <div className="border-t pt-2 flex justify-between font-bold">
+                      <span>Break-even Volume:</span>
+                            <span>{breakEvenVolume !== null ? (breakEvenVolume as number).toFixed(1) + ' tons/month' : 'Not Achieved'}</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                      <span>Break-even Capacity Utilization:</span>
+                            <span>{breakEvenVolume !== null && breakEvenCapacity !== null ? breakEvenCapacity.toFixed(1) + '%' : 'Not Achieved'}</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                      <span>Break-even Year:</span>
+                            <span>{breakEvenVolume !== null && breakEvenYear > 0 ? Math.ceil(yearConfig.startYear + breakEvenYear) : 'Not Achieved'}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="border rounded p-4">
+                  <h3 className="font-medium text-lg mb-3">Margin of Safety</h3>
+                  <div className="space-y-3">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Current Monthly Volume:</span>
+                      <span className="font-medium">{(modelData.capacity * (capacityUsage / 100)).toFixed(0)} tons</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Break-even Volume:</span>
+                            <span className="font-medium">{breakEvenVolume !== null ? (breakEvenVolume as number).toFixed(0) : 'N/A'} tons</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                      <span>Safety Margin (Volume):</span>
+                            <span>{breakEvenVolume !== null ? ((modelData.capacity * (capacityUsage / 100)) - (breakEvenVolume as number)).toFixed(0) : 'N/A'} tons</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                      <span>Safety Margin (%):</span>
+                            <span>{breakEvenVolume !== null ? (100 * ((modelData.capacity * (capacityUsage / 100)) - (breakEvenVolume as number)) / (modelData.capacity * (capacityUsage / 100))).toFixed(1) : 'N/A'}%</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="mb-6">
+                <h3 className="font-medium text-lg mb-3">Break-even Sensitivity Analysis</h3>
+                <p className="text-sm text-gray-600 mb-4">
                         This table shows how changes in capacity utilization affect profitability, using the effective variable cost at each volume.
-                      </p>
-                      <div className="overflow-x-auto">
-                        <table className="min-w-full bg-white border">
-                          <thead>
-                            <tr className="bg-gray-50">
-                              <th className="py-2 px-4 border-b text-left">Capacity %</th>
-                              <th className="py-2 px-4 border-b text-right">Monthly Volume</th>
-                              <th className="py-2 px-4 border-b text-right">Monthly Revenue</th>
-                              <th className="py-2 px-4 border-b text-right">Variable Costs</th>
-                              <th className="py-2 px-4 border-b text-right">Contribution</th>
-                              <th className="py-2 px-4 border-b text-right">Fixed Costs</th>
-                              <th className="py-2 px-4 border-b text-right">Profit/Loss</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {[40, 50, 60, 70, 80, 90, 100].map(cap => {
-                              const volume = modelData.capacity * (cap / 100);
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full bg-white border">
+                    <thead>
+                      <tr className="bg-gray-50">
+                        <th className="py-2 px-4 border-b text-left">Capacity %</th>
+                        <th className="py-2 px-4 border-b text-right">Monthly Volume</th>
+                        <th className="py-2 px-4 border-b text-right">Monthly Revenue</th>
+                        <th className="py-2 px-4 border-b text-right">Variable Costs</th>
+                        <th className="py-2 px-4 border-b text-right">Contribution</th>
+                        <th className="py-2 px-4 border-b text-right">Fixed Costs</th>
+                        <th className="py-2 px-4 border-b text-right">Profit/Loss</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[40, 50, 60, 70, 80, 90, 100].map(cap => {
+                        const volume = modelData.capacity * (cap / 100);
                               const effectiveVC = (() => {
                                 // Use the same calculateTotalVariableCost as above
                                 return variableCosts.reduce((sum, cost) => {
@@ -2829,31 +3421,31 @@ const EmpowerModel = () => {
                                 if (item.annual) return sum + (item.cost / 12);
                                 return sum;
                               }, 0);
-                              return (
+                        return (
                                 <tr key={cap} className={breakEvenVolume !== null && Math.abs(volume - (breakEvenVolume as number)) < step ? 'bg-blue-50' : (profit >= 0 ? 'bg-green-50' : 'bg-red-50')}>
-                                  <td className="py-2 px-4 border-b">{cap}%</td>
-                                  <td className="py-2 px-4 border-b text-right">{volume.toFixed(0)}</td>
-                                  <td className="py-2 px-4 border-b text-right">{revenue.toLocaleString()}</td>
+                            <td className="py-2 px-4 border-b">{cap}%</td>
+                            <td className="py-2 px-4 border-b text-right">{volume.toFixed(0)}</td>
+                            <td className="py-2 px-4 border-b text-right">{revenue.toLocaleString()}</td>
                                   <td className="py-2 px-4 border-b text-right">{variableCostsTotal.toLocaleString()}</td>
-                                  <td className="py-2 px-4 border-b text-right">{contribution.toLocaleString()}</td>
+                            <td className="py-2 px-4 border-b text-right">{contribution.toLocaleString()}</td>
                                   <td className="py-2 px-4 border-b text-right">{fixedCosts.reduce((sum, item) => {if (item.monthly) return sum + item.cost;if (item.annual) return sum + (item.cost / 12);return sum;}, 0).toLocaleString()}</td>
                                   <td className={`py-2 px-4 border-b text-right font-medium ${profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>{profit.toLocaleString()}</td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                    <div>
-                      <h3 className="font-medium text-lg mb-3">Notes</h3>
-                      <ul className="list-disc pl-5 space-y-2 text-sm text-gray-600">
-                        <li>Break-even point is where total revenue equals total costs (fixed + variable).</li>
-                        <li>The break-even calculation uses weighted average prices and costs based on your product mix.</li>
-                        <li>To lower your break-even point, you can either reduce fixed costs, reduce variable costs, increase prices, or improve your product mix toward higher-margin products.</li>
-                        <li>The margin of safety indicates how much sales can drop before reaching the break-even point.</li>
-                      </ul>
-                    </div>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div>
+                <h3 className="font-medium text-lg mb-3">Notes</h3>
+                <ul className="list-disc pl-5 space-y-2 text-sm text-gray-600">
+                  <li>Break-even point is where total revenue equals total costs (fixed + variable).</li>
+                  <li>The break-even calculation uses weighted average prices and costs based on your product mix.</li>
+                  <li>To lower your break-even point, you can either reduce fixed costs, reduce variable costs, increase prices, or improve your product mix toward higher-margin products.</li>
+                  <li>The margin of safety indicates how much sales can drop before reaching the break-even point.</li>
+                </ul>
+              </div>
                   </>
                 );
               })()}
@@ -2867,16 +3459,16 @@ const EmpowerModel = () => {
                 This analysis includes loan payments in the break-even calculation, showing the volume needed to cover both operating costs and debt service.
               </p>
 
-              {/* Dynamic break-even with debt calculation (first positive profit after debt) */}
+              {/* Dynamic break-even with debt calculation */}
               {(() => {
-                const weightedPrice = priceTiers.reduce((sum, tier) => sum + (tier.price * (tier.percentage / 100)), 0);
-                const monthlyFixedCost = fixedCosts.reduce((sum, item) => {
-                  if (item.monthly) return sum + item.cost;
-                  if (item.annual) return sum + (item.cost / 12);
-                  return sum;
-                }, 0);
-                const monthlyLoanPayment = loans.reduce((sum, loan) => sum + calculateMonthlyPayment(loan.amount, loan.interestRate, loan.term), 0);
+                const weightedPrice = priceTiers.reduce((sum, tier) => 
+                  sum + (tier.price * (tier.percentage / 100)), 0);
+                
+                const monthlyFixedCost = calculateMonthlyFixedCost(fixedCosts);
+                const monthlyLoanPayment = loans.reduce((sum, loan) => 
+                  sum + calculateMonthlyPayment(loan.amount, loan.interestRate, loan.term), 0);
                 const totalMonthlyFixedCost = monthlyFixedCost + monthlyLoanPayment;
+
                 const calculateTotalVariableCost = (volume: number) => {
                   return variableCosts.reduce((sum, cost) => {
                     const effectiveUnitCost = calculateEffectiveVariableCost(cost, volume);
@@ -2891,27 +3483,35 @@ const EmpowerModel = () => {
                     return sum;
                   }, 0);
                 };
+
+                // Calculate break-even point by scanning through volumes
                 let breakEvenVolume = null;
-                let breakEvenProfit = null;
                 let breakEvenCapacity = null;
                 let effectiveVariableCostAtBE = null;
                 let contributionMarginAtBE = null;
-                let step = Math.max(1, Math.floor(modelData.capacity / 200));
+                
+                // Use smaller steps for more precise calculation
+                let step = Math.max(1, Math.floor(modelData.capacity / 2000)); // More precise step size
+                
+                // Start from a low volume and increase until we find break-even
                 for (let v = 0; v <= modelData.capacity; v += step) {
                   const effectiveVC = calculateTotalVariableCost(v);
                   const revenue = v * weightedPrice;
                   const variableCosts = v * effectiveVC;
                   const contribution = revenue - variableCosts;
                   const profit = contribution - totalMonthlyFixedCost;
-                  if (profit > 0) {
+                  
+                  if (profit >= 0) {
+                    // Found break-even point
                     breakEvenVolume = v;
-                    breakEvenProfit = profit;
                     breakEvenCapacity = (v / modelData.capacity) * 100;
                     effectiveVariableCostAtBE = effectiveVC;
                     contributionMarginAtBE = weightedPrice - effectiveVC;
                     break;
                   }
                 }
+
+                // Calculate break-even year if we found a break-even volume
                 let breakEvenYear = 0;
                 if (breakEvenVolume !== null) {
                   for (let year = 0; year < yearConfig.duration; year++) {
@@ -2921,101 +3521,108 @@ const EmpowerModel = () => {
                     const projectedUsage = baseUsage * Math.pow(1 + growth / 100, yearsSinceStart);
                     const cappedUsage = Math.min(projectedUsage, 100);
                     const monthlyVolume = modelData.capacity * (cappedUsage / 100);
+                    
                     if (monthlyVolume >= breakEvenVolume) {
-                      const prevYearVolume = year > 0 ? modelData.capacity * (Math.min(baseUsage * Math.pow(1 + growth / 100, yearsSinceStart - 1), 100) / 100) : 0;
-                      const fraction = (breakEvenVolume - prevYearVolume) / (monthlyVolume - prevYearVolume);
-                      breakEvenYear = year + fraction;
+                      if (year === 0) {
+                        breakEvenYear = (breakEvenVolume / monthlyVolume) * year;
+                      } else {
+                        const prevYearVolume = modelData.capacity * 
+                          (Math.min(baseUsage * Math.pow(1 + growth / 100, yearsSinceStart - 1), 100) / 100);
+                        const fraction = (breakEvenVolume - prevYearVolume) / (monthlyVolume - prevYearVolume);
+                        breakEvenYear = year + fraction;
+                      }
                       break;
                     }
                   }
                 }
+                
                 return (
                   <>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                      <div className="border rounded p-4">
-                        <h3 className="font-medium text-lg mb-3">Break-even Summary with Debt</h3>
-                        <div className="space-y-3">
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Monthly Fixed Costs:</span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <div className="border rounded p-4">
+                  <h3 className="font-medium text-lg mb-3">Break-even Summary with Debt</h3>
+                  <div className="space-y-3">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Monthly Fixed Costs:</span>
                             <span className="font-medium">{formatNumber(monthlyFixedCost)} THB</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Monthly Loan Payments:</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Monthly Loan Payments:</span>
                             <span className="font-medium">{formatNumber(monthlyLoanPayment)} THB</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Total Monthly Fixed Costs:</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Total Monthly Fixed Costs:</span>
                             <span className="font-medium">{formatNumber(totalMonthlyFixedCost)} THB</span>
-                          </div>
-                          <div className="flex justify-between">
+                    </div>
+                    <div className="flex justify-between">
                             <span className="text-gray-600">Variable Cost per Ton (at BE):</span>
                             <span className="font-medium">{breakEvenVolume !== null ? formatNumber(effectiveVariableCostAtBE ?? 0) : 'N/A'} THB</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Average Price per Ton:</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Average Price per Ton:</span>
                             <span className="font-medium">{formatNumber(weightedPrice)} THB</span>
-                          </div>
-                          <div className="flex justify-between">
+                    </div>
+                    <div className="flex justify-between">
                             <span className="text-gray-600">Contribution Margin per Ton (at BE):</span>
                             <span className="font-medium">{breakEvenVolume !== null ? formatNumber(contributionMarginAtBE ?? 0) : 'N/A'} THB</span>
-                          </div>
-                          <div className="border-t pt-2 flex justify-between font-bold">
-                            <span>Break-even Volume with Debt:</span>
-                            <span>{breakEvenVolume !== null ? (breakEvenVolume as number).toFixed(1) + ' tons/month' : 'Not Achieved'}</span>
-                          </div>
-                          <div className="flex justify-between font-bold">
-                            <span>Break-even Capacity with Debt:</span>
-                            <span>{breakEvenVolume !== null && breakEvenCapacity !== null ? breakEvenCapacity.toFixed(1) + '%' : 'Not Achieved'}</span>
-                          </div>
-                          <div className="flex justify-between font-bold">
-                            <span>Break-even Year with Debt:</span>
-                            <span>{breakEvenVolume !== null && breakEvenYear > 0 ? `${(yearConfig.startYear + breakEvenYear).toFixed(1)}` : 'Not Achieved'}</span>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="border rounded p-4">
-                        <h3 className="font-medium text-lg mb-3">Margin of Safety with Debt</h3>
-                        <div className="space-y-3">
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Current Monthly Volume:</span>
-                            <span className="font-medium">{(modelData.capacity * (capacityUsage / 100)).toFixed(0)} tons</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Break-even Volume with Debt:</span>
-                            <span className="font-medium">{breakEvenVolume !== null ? (breakEvenVolume as number).toFixed(0) : 'N/A'} tons</span>
-                          </div>
-                          <div className="flex justify-between font-bold">
-                            <span>Safety Margin (Volume):</span>
-                            <span>{breakEvenVolume !== null ? ((modelData.capacity * (capacityUsage / 100)) - (breakEvenVolume as number)).toFixed(0) : 'N/A'} tons</span>
-                          </div>
-                          <div className="flex justify-between font-bold">
-                            <span>Safety Margin (%):</span>
-                            <span>{breakEvenVolume !== null ? (100 * ((modelData.capacity * (capacityUsage / 100)) - (breakEvenVolume as number)) / (modelData.capacity * (capacityUsage / 100))).toFixed(1) : 'N/A'}%</span>
-                          </div>
-                        </div>
-                      </div>
                     </div>
-                    <div className="mb-6">
-                      <h3 className="font-medium text-lg mb-3">Break-even Sensitivity Analysis with Debt</h3>
-                      <p className="text-sm text-gray-600 mb-4">
+                    <div className="border-t pt-2 flex justify-between font-bold">
+                      <span>Break-even Volume with Debt:</span>
+                            <span>{breakEvenVolume !== null ? (breakEvenVolume as number).toFixed(1) + ' tons/month' : 'Not Achieved'}</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                      <span>Break-even Capacity with Debt:</span>
+                            <span>{breakEvenVolume !== null && breakEvenCapacity !== null ? breakEvenCapacity.toFixed(1) + '%' : 'Not Achieved'}</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                      <span>Break-even Year with Debt:</span>
+                            <span>{breakEvenVolume !== null && breakEvenYear > 0 ? Math.ceil(yearConfig.startYear + breakEvenYear) : 'Not Achieved'}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="border rounded p-4">
+                  <h3 className="font-medium text-lg mb-3">Margin of Safety with Debt</h3>
+                  <div className="space-y-3">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Current Monthly Volume:</span>
+                      <span className="font-medium">{(modelData.capacity * (capacityUsage / 100)).toFixed(0)} tons</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Break-even Volume with Debt:</span>
+                            <span className="font-medium">{breakEvenVolume !== null ? (breakEvenVolume as number).toFixed(0) : 'N/A'} tons</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                      <span>Safety Margin (Volume):</span>
+                            <span>{breakEvenVolume !== null ? ((modelData.capacity * (capacityUsage / 100)) - (breakEvenVolume as number)).toFixed(0) : 'N/A'} tons</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                      <span>Safety Margin (%):</span>
+                            <span>{breakEvenVolume !== null ? (100 * ((modelData.capacity * (capacityUsage / 100)) - (breakEvenVolume as number)) / (modelData.capacity * (capacityUsage / 100))).toFixed(1) : 'N/A'}%</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="mb-6">
+                <h3 className="font-medium text-lg mb-3">Break-even Sensitivity Analysis with Debt</h3>
+                <p className="text-sm text-gray-600 mb-4">
                         This table shows how changes in capacity utilization affect profitability, using the effective variable cost at each volume.
-                      </p>
-                      <div className="overflow-x-auto">
-                        <table className="min-w-full bg-white border">
-                          <thead>
-                            <tr className="bg-gray-50">
-                              <th className="py-2 px-4 border-b text-left">Capacity %</th>
-                              <th className="py-2 px-4 border-b text-right">Monthly Volume</th>
-                              <th className="py-2 px-4 border-b text-right">Monthly Revenue</th>
-                              <th className="py-2 px-4 border-b text-right">Variable Costs</th>
-                              <th className="py-2 px-4 border-b text-right">Contribution</th>
-                              <th className="py-2 px-4 border-b text-right">Fixed Costs + Loan Payments</th>
-                              <th className="py-2 px-4 border-b text-right">Profit/Loss</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {[40, 50, 60, 70, 80, 90, 100].map(cap => {
-                              const volume = modelData.capacity * (cap / 100);
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full bg-white border">
+                    <thead>
+                      <tr className="bg-gray-50">
+                        <th className="py-2 px-4 border-b text-left">Capacity %</th>
+                        <th className="py-2 px-4 border-b text-right">Monthly Volume</th>
+                        <th className="py-2 px-4 border-b text-right">Monthly Revenue</th>
+                        <th className="py-2 px-4 border-b text-right">Variable Costs</th>
+                        <th className="py-2 px-4 border-b text-right">Contribution</th>
+                        <th className="py-2 px-4 border-b text-right">Fixed Costs + Loan Payments</th>
+                        <th className="py-2 px-4 border-b text-right">Profit/Loss</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[40, 50, 60, 70, 80, 90, 100].map(cap => {
+                        const volume = modelData.capacity * (cap / 100);
                               const effectiveVC = (() => {
                                 return variableCosts.reduce((sum, cost) => {
                                   const effectiveUnitCost = calculateEffectiveVariableCost(cost, volume);
@@ -3038,33 +3645,33 @@ const EmpowerModel = () => {
                                 if (item.annual) return sum + (item.cost / 12);
                                 return sum;
                               }, 0) + loans.reduce((sum, loan) => sum + calculateMonthlyPayment(loan.amount, loan.interestRate, loan.term), 0);
-                              const profit = contribution - totalFixedCosts;
-                              return (
+                        const profit = contribution - totalFixedCosts;
+                        return (
                                 <tr key={cap} className={breakEvenVolume !== null && Math.abs(volume - (breakEvenVolume as number)) < step ? 'bg-blue-50' : (profit >= 0 ? 'bg-green-50' : 'bg-red-50')}>
-                                  <td className="py-2 px-4 border-b">{cap}%</td>
-                                  <td className="py-2 px-4 border-b text-right">{volume.toFixed(0)}</td>
-                                  <td className="py-2 px-4 border-b text-right">{revenue.toLocaleString()}</td>
+                            <td className="py-2 px-4 border-b">{cap}%</td>
+                            <td className="py-2 px-4 border-b text-right">{volume.toFixed(0)}</td>
+                            <td className="py-2 px-4 border-b text-right">{revenue.toLocaleString()}</td>
                                   <td className="py-2 px-4 border-b text-right">{variableCostsTotal.toLocaleString()}</td>
-                                  <td className="py-2 px-4 border-b text-right">{contribution.toLocaleString()}</td>
-                                  <td className="py-2 px-4 border-b text-right">{totalFixedCosts.toLocaleString()}</td>
+                            <td className="py-2 px-4 border-b text-right">{contribution.toLocaleString()}</td>
+                            <td className="py-2 px-4 border-b text-right">{totalFixedCosts.toLocaleString()}</td>
                                   <td className={`py-2 px-4 border-b text-right font-medium ${profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>{profit.toLocaleString()}</td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                    <div>
-                      <h3 className="font-medium text-lg mb-3">Notes</h3>
-                      <ul className="list-disc pl-5 space-y-2 text-sm text-gray-600">
-                        <li>Break-even point with debt is where total revenue equals total costs (fixed + variable + loan payments).</li>
-                        <li>The break-even calculation uses weighted average prices and costs based on your product mix.</li>
-                        <li>Including loan payments in the break-even calculation typically results in a higher break-even point than the regular break-even analysis.</li>
-                        <li>The margin of safety indicates how much sales can drop before reaching the break-even point with debt service.</li>
-                        <li>To lower your break-even point with debt, you can either reduce fixed costs, reduce variable costs, increase prices, improve your product mix, or restructure your loans.</li>
-                      </ul>
-                    </div>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div>
+                <h3 className="font-medium text-lg mb-3">Notes</h3>
+                <ul className="list-disc pl-5 space-y-2 text-sm text-gray-600">
+                  <li>Break-even point with debt is where total revenue equals total costs (fixed + variable + loan payments).</li>
+                  <li>The break-even calculation uses weighted average prices and costs based on your product mix.</li>
+                  <li>Including loan payments in the break-even calculation typically results in a higher break-even point than the regular break-even analysis.</li>
+                  <li>The margin of safety indicates how much sales can drop before reaching the break-even point with debt service.</li>
+                  <li>To lower your break-even point with debt, you can either reduce fixed costs, reduce variable costs, increase prices, improve your product mix, or restructure your loans.</li>
+                </ul>
+              </div>
                   </>
                 );
               })()}
@@ -3190,6 +3797,341 @@ const EmpowerModel = () => {
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {activeTab === 'productCostAnalysis' && (
+            <div className="space-y-6 p-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-bold">Product Cost Analysis</h2>
+                <div className="flex gap-4 items-center">
+                  {/* Volume Adjustment */}
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm font-medium text-gray-600">Monthly Volume:</label>
+                    <input
+                      type="text"
+                      className="input text-sm w-32"
+                      value={formatInputNumber(modelData.capacity.toString())}
+                      onChange={(e) => {
+                        const newCapacity = parseFormattedNumber(e.target.value);
+                        setModelData({
+                          ...modelData,
+                          capacity: newCapacity,
+                          capacityAnnual: newCapacity * 12
+                        });
+                      }}
+                    />
+                    <span className="text-sm text-gray-500">tons</span>
+        </div>
+                  {/* Capacity Usage */}
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm font-medium text-gray-600">Capacity Usage:</label>
+                    <input
+                      type="number"
+                      className="input text-sm w-20"
+                      value={capacityUsage}
+                      onChange={(e) => setCapacityUsage(parseFloat(e.target.value))}
+                      min="0"
+                      max="100"
+                      step="1"
+                    />
+                    <span className="text-sm text-gray-500">%</span>
+      </div>
+                  {/* Product Selection */}
+                  <select
+                    className="input text-sm"
+                    value={activeProductTier === 'all' ? 'all' : activeProductTier}
+                    onChange={(e) => setActiveProductTier(e.target.value)}
+                  >
+                    <option value="all">All Products</option>
+                    {priceTiers.map(tier => (
+                      <option key={tier.name} value={tier.name}>{tier.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Rest of the Product Cost Analysis content */}
+              {priceTiers
+                .filter(tier => activeProductTier === 'all' || activeProductTier === tier.name)
+                .map(tier => {
+                  // Calculate cost breakdown for the product
+                  const monthlyVolume = modelData.capacity * (capacityUsage / 100) * (tier.percentage / 100);
+                  const productVariableCosts = variableCosts
+                    .filter(cost => cost.tier === tier.name || cost.all)
+                    .map(cost => {
+                      const unitCost = calculateEffectiveVariableCost(cost, monthlyVolume);
+                      return {
+                        name: cost.name,
+                        unitCost,
+                        totalCost: unitCost * monthlyVolume,
+                        percentageOfPrice: (unitCost / tier.price) * 100
+                      };
+                    });
+
+                  // Calculate allocated fixed costs
+                  const totalFixedCosts = fixedCosts.reduce((sum, cost) => {
+                    if (cost.monthly) return sum + cost.cost;
+                    if (cost.annual) return sum + (cost.cost / 12);
+                    return sum;
+                  }, 0);
+                  
+                  const allocatedFixedCosts = [{
+                    name: 'Allocated Fixed Costs',
+                    allocatedCost: (totalFixedCosts * (tier.percentage / 100)) / monthlyVolume,
+                    percentageOfPrice: ((totalFixedCosts * (tier.percentage / 100)) / monthlyVolume / tier.price) * 100
+                  }];
+
+                  const totalVariableCost = productVariableCosts.reduce((sum, cost) => sum + cost.unitCost, 0);
+                  const totalAllocatedFixedCost = allocatedFixedCosts[0].allocatedCost;
+                  const totalCost = totalVariableCost + totalAllocatedFixedCost;
+                  const margin = tier.price - totalCost;
+                  const marginPercentage = (margin / tier.price) * 100;
+
+                  return (
+                    <div key={tier.name} className="card mt-6">
+                      <div className="flex justify-between items-center mb-6">
+                        <h3 className="text-lg font-semibold">{tier.name} Cost Analysis</h3>
+                        <div className="text-sm text-gray-500">
+                          Monthly Volume: {formatNumber(monthlyVolume)} tons
+                        </div>
+                      </div>
+
+                      {/* Cost Overview Cards */}
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                        <div className="bg-white p-4 rounded-lg border border-gray-200">
+                          <div className="text-sm text-gray-500">Price</div>
+                          <div className="text-xl font-bold">{formatNumber(tier.price)} THB</div>
+                        </div>
+                        <div className="bg-white p-4 rounded-lg border border-gray-200">
+                          <div className="text-sm text-gray-500">Total Cost</div>
+                          <div className="text-xl font-bold">{formatNumber(totalCost)} THB</div>
+                        </div>
+                        <div className="bg-white p-4 rounded-lg border border-gray-200">
+                          <div className="text-sm text-gray-500">Margin</div>
+                          <div className="text-xl font-bold">{formatNumber(margin)} THB</div>
+                        </div>
+                        <div className="bg-white p-4 rounded-lg border border-gray-200">
+                          <div className="text-sm text-gray-500">Margin %</div>
+                          <div className="text-xl font-bold">{marginPercentage.toFixed(1)}%</div>
+                        </div>
+                      </div>
+
+                      {/* Cost Optimization Opportunities */}
+                      <div className="mb-6">
+                        <h4 className="text-md font-semibold mb-4">Cost Optimization Opportunities</h4>
+                        <div className="space-y-4">
+                          {/* Volume-based Savings */}
+                          {productVariableCosts.some(cost => cost.percentageOfPrice > 15) && (
+                            <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
+                              <h5 className="font-medium text-yellow-800 mb-2">High Cost Components</h5>
+                              <ul className="list-disc list-inside text-sm text-yellow-700">
+                                {productVariableCosts
+                                  .filter(cost => cost.percentageOfPrice > 15)
+                                  .map(cost => (
+                                    <li key={cost.name}>
+                                      {cost.name} represents {cost.percentageOfPrice.toFixed(1)}% of the price. 
+                                      Consider negotiating better rates or finding alternative suppliers.
+                                    </li>
+                                  ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* Volume Optimization */}
+                          {marginPercentage < 20 && (
+                            <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                              <h5 className="font-medium text-blue-800 mb-2">Margin Improvement Opportunities</h5>
+                              <ul className="list-disc list-inside text-sm text-blue-700">
+                                <li>Current margin ({marginPercentage.toFixed(1)}%) is below target. Consider:</li>
+                                <li>Increasing production volume to benefit from economies of scale</li>
+                                <li>Reviewing pricing strategy</li>
+                                <li>Optimizing fixed cost allocation</li>
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* Fixed Cost Allocation */}
+                          {allocatedFixedCosts[0].percentageOfPrice > 10 && (
+                            <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+                              <h5 className="font-medium text-green-800 mb-2">Fixed Cost Optimization</h5>
+                              <ul className="list-disc list-inside text-sm text-green-700">
+                                <li>
+                                  Fixed costs represent {allocatedFixedCosts[0].percentageOfPrice.toFixed(1)}% of the price.
+                                  Consider increasing production volume to better absorb fixed costs.
+                                </li>
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Cost Breakdown */}
+                      <div className="mb-6">
+                        <h4 className="text-md font-semibold mb-4">Cost Breakdown</h4>
+                        
+                        {/* Sorting Options */}
+                        <div className="flex justify-end mb-4">
+                          <select
+                            className="input text-sm"
+                            defaultValue="percentage"
+                            onChange={(e) => {
+                              // We'll handle the sorting in the render logic below
+                              // This is just to trigger a re-render
+                              setModelVersion(prev => prev + 1);
+                            }}
+                            id="costSortOption"
+                          >
+                            <option value="percentage">Sort by % of Price</option>
+                            <option value="unitCost">Sort by Unit Cost</option>
+                            <option value="totalCost">Sort by Total Cost</option>
+                          </select>
+                        </div>
+
+                        {/* Product Cost Analysis Table */}
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full">
+                            <thead>
+                              <tr className="bg-gray-50">
+                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Cost Component</th>
+                                <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Unit Cost (THB)</th>
+                                <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Total Cost (THB)</th>
+                                <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">% of Cost</th>
+                                <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">% of Price</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(() => {
+                                const sortOption = (document.getElementById('costSortOption') as HTMLSelectElement)?.value || 'percentage';
+                                const sortedCosts = [...productVariableCosts].sort((a, b) => {
+                                  switch(sortOption) {
+                                    case 'percentage':
+                                      return b.percentageOfPrice - a.percentageOfPrice;
+                                    case 'unitCost':
+                                      return b.unitCost - a.unitCost;
+                                    case 'totalCost':
+                                      return b.totalCost - a.totalCost;
+                                    default:
+                                      return b.percentageOfPrice - a.percentageOfPrice;
+                                  }
+                                });
+
+                                const totalCostValue = sortedCosts.reduce((sum, cost) => sum + cost.totalCost, 0) + 
+                                  (allocatedFixedCosts[0]?.allocatedCost || 0) * monthlyVolume;
+
+                                const getIndicatorColor = (index: number) => {
+                                  switch(index) {
+                                    case 0: return 'text-red-500';
+                                    case 1: return 'text-orange-500';
+                                    case 2: return 'text-yellow-500';
+                                    default: return '';
+                                  }
+                                };
+
+                                return sortedCosts.map((cost, index) => {
+                                  const isTopThree = index < 3;
+                                  const percentageOfTotalCost = (cost.totalCost / totalCostValue) * 100;
+
+                                  return (
+                                    <tr key={cost.name} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                      <td className="px-4 py-2">
+                                        <div className="flex items-center">
+                                          <span className={`font-medium ${getIndicatorColor(index)}`}>
+                                            {index + 1}.
+                                          </span>
+                                          <span className="ml-2">{cost.name}</span>
+                                          {isTopThree && (
+                                            <span className={`ml-2 text-xs font-medium ${getIndicatorColor(index)}`}>
+                                              {index === 0 ? '(Highest Impact)' : 
+                                               index === 1 ? '(High Impact)' : 
+                                               '(Significant)'}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </td>
+                                      <td className="px-4 py-2 text-right">
+                                        {formatNumber(cost.unitCost)}
+                                        {isTopThree && (
+                                          <span className={`ml-1 text-xs ${getIndicatorColor(index)}`}>
+                                            ▲
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="px-4 py-2 text-right">
+                                        {formatNumber(cost.totalCost)}
+                                        {isTopThree && (
+                                          <span className={`ml-1 text-xs ${getIndicatorColor(index)}`}>
+                                            ▲
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="px-4 py-2 text-right">
+                                        <span className={`font-medium ${isTopThree ? getIndicatorColor(index) : ''}`}>
+                                          {percentageOfTotalCost.toFixed(1)}%
+                                        </span>
+                                        {isTopThree && (
+                                          <span className={`ml-1 text-xs ${getIndicatorColor(index)}`}>
+                                            ▲
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="px-4 py-2 text-right">
+                                        <span className={`font-medium ${isTopThree ? getIndicatorColor(index) : ''}`}>
+                                          {cost.percentageOfPrice.toFixed(1)}%
+                                        </span>
+                                        {isTopThree && (
+                                          <span className={`ml-1 text-xs ${getIndicatorColor(index)}`}>
+                                            ▲
+                                          </span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                });
+                              })()}
+                              {allocatedFixedCosts.map((cost, index) => {
+                                const totalCostValue = productVariableCosts.reduce((sum, cost) => sum + cost.totalCost, 0) + 
+                                  cost.allocatedCost * monthlyVolume;
+                                const percentageOfTotalCost = ((cost.allocatedCost * monthlyVolume) / totalCostValue) * 100;
+
+                                return (
+                                  <tr key={cost.name} className="bg-blue-50">
+                                    <td className="px-4 py-2">
+                                      <span className="font-medium">{productVariableCosts.length + index + 1}.</span>
+                                      <span className="ml-2">{cost.name}</span>
+                                    </td>
+                                    <td className="px-4 py-2 text-right">{formatNumber(cost.allocatedCost)}</td>
+                                    <td className="px-4 py-2 text-right">{formatNumber(cost.allocatedCost * monthlyVolume)}</td>
+                                    <td className="px-4 py-2 text-right font-medium">{percentageOfTotalCost.toFixed(1)}%</td>
+                                    <td className="px-4 py-2 text-right font-medium">{cost.percentageOfPrice.toFixed(1)}%</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* Legend for Top Costs */}
+                        <div className="mt-4 text-sm text-gray-600">
+                          <div className="flex items-center gap-6">
+                            <div className="flex items-center">
+                              <span className="inline-block w-3 h-3 bg-red-500 mr-2"></span>
+                              Highest Impact
+                            </div>
+                            <div className="flex items-center">
+                              <span className="inline-block w-3 h-3 bg-orange-500 mr-2"></span>
+                              High Impact
+                            </div>
+                            <div className="flex items-center">
+                              <span className="inline-block w-3 h-3 bg-yellow-500 mr-2"></span>
+                              Significant
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
             </div>
           )}
         </div>
