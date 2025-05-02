@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "NODE_OPTIONS=--no-experimental-fetch tsc -b && vite build",
+    "build": "NODE_OPTIONS=--no-experimental-fetch ROLLUP_NATIVE=false tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
