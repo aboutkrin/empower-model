@@ -1,3 +1,5 @@
+import { Loan } from './types/parameters';
+
 // Create a new file for types
 export interface ModelConfig {
   modelData: {
@@ -32,13 +34,5 @@ export interface ModelConfig {
     tier?: string;
     all?: boolean;
   }[];
-  loans: {
-    name: string;
-    amount: number;
-    bank: string;
-    interestRate: number;
-    term: number;
-    startDate: string;
-    type: string;
-  }[];
+  loans: Loan[];
 } 

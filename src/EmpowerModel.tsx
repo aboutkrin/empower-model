@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { ModelConfig } from './types';
+import { defaultParameters } from './config/defaultParameters';
+import { Parameters, FixedCost, VariableCost, Loan } from './types/parameters';
 
 // Add TypeScript interfaces for better type safety
 interface SavedModel {
@@ -36,15 +38,7 @@ interface SavedModel {
     all?: boolean;
     volumeReduction?: number; // Percentage reduction per 1000 tons
   }>;
-  loans: Array<{
-    name: string;
-    amount: number;
-    bank: string;
-    interestRate: number;
-    term: number;
-    startDate: string;
-    type: string;
-  }>;
+  loans: Loan[];
   irrTimeframe: number;
 }
 
@@ -108,54 +102,28 @@ interface ProductCostBreakdown {
 type TabType = 'dashboard' | 'financials' | 'cashflow' | 'breakeven' | 'breakevenWithDebt' | 'productCostAnalysis' | 'costing' | 'loans' | 'statistics';
 
 const EmpowerModel = () => {
-  const [modelData, setModelData] = useState({
-    capacity: 10000,
-    capacityAnnual: 120000,
-    years: Array.from({ length: 10 }, (_, i) => 2023 + i), // Creates array [2023, 2024, ..., 2032]
-  });
+  // Model state
+  const [modelData, setModelData] = useState<Parameters['modelData']>(defaultParameters.modelData);
+  const [yearConfig, setYearConfig] = useState<Parameters['yearConfig']>(defaultParameters.yearConfig);
+  const [capacityUsage, setCapacityUsage] = useState<Parameters['capacityUsage']>(defaultParameters.capacityUsage);
+  const [capacityGrowth, setCapacityGrowth] = useState<Parameters['capacityGrowth']>(defaultParameters.capacityGrowth);
+  const [priceTiers, setPriceTiers] = useState<Parameters['priceTiers']>(defaultParameters.priceTiers);
+  const [priceGrowth, setPriceGrowth] = useState<Parameters['priceGrowth']>(defaultParameters.priceGrowth);
+  const [fixedCosts, setFixedCosts] = useState<Parameters['fixedCosts']>(defaultParameters.fixedCosts);
+  const [variableCosts, setVariableCosts] = useState<Parameters['variableCosts']>(defaultParameters.variableCosts);
+  const [loans, setLoans] = useState<Parameters['loans']>(defaultParameters.loans);
+  const [irrTimeframe, setIrrTimeframe] = useState(defaultParameters.yearConfig.duration);
+  const [durationInput, setDurationInput] = useState(yearConfig.duration.toString());
 
+  // UI state
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
   const [activeSubTab, setActiveSubTab] = useState('costs');
   const [activeProductTier, setActiveProductTier] = useState<'all' | string>('all');
   const [loading, setLoading] = useState(true);
-  const [capacityUsage, setCapacityUsage] = useState(75);
-  const [priceTiers, setPriceTiers] = useState([
-    { name: "Em-Unique", price: 40000, percentage: 20 },
-    { name: "Em-One", price: 45000, percentage: 30 },
-    { name: "Em-Pro", price: 48000, percentage: 35 },
-    { name: "Em-Star", price: 52000, percentage: 15 }
-  ]);
-  const [priceGrowth, setPriceGrowth] = useState(2.0);
-  
-  const [fixedCosts, setFixedCosts] = useState([
-    { name: "Building Depreciation", cost: 20800000, annual: true, type: "depreciation", years: 25, startYear: 2023 },
-    { name: "PPGL Machine Depreciation", cost: 22500000, annual: true, type: "depreciation", years: 20, startYear: 2023 },
-    { name: "Soft Cost Depreciation", cost: 1000000, annual: true, type: "depreciation", years: 20, startYear: 2023 },
-    { name: "Administrative Staff", cost: 1500000, monthly: true, type: "regular" },
-    { name: "Utilities - Fixed", cost: 800000, monthly: true, type: "regular" },
-    { name: "Maintenance Contract", cost: 650000, monthly: true, type: "regular" },
-    { name: "Insurance", cost: 450000, monthly: true, type: "regular" },
-    { name: "Other Fixed Costs", cost: 350000, monthly: true, type: "regular" }
-  ]);
-  
-  const [variableCosts, setVariableCosts] = useState<SavedModel['variableCosts']>([
-    { name: "Raw Materials - Tier 1", unitCost: 42000, tier: "Em-Unique", volumeReduction: 0 },
-    { name: "Raw Materials - Tier 2", unitCost: 39000, tier: "Em-One", volumeReduction: 0 },
-    { name: "Raw Materials - Tier 3", unitCost: 36000, tier: "Em-Pro", volumeReduction: 0 },
-    { name: "Raw Materials - Tier 4", unitCost: 33000, tier: "Em-Star", volumeReduction: 0 },
-    { name: "Paint - Tier 1", unitCost: 7000, tier: "Em-Unique", volumeReduction: 0 },
-    { name: "Paint - Tier 2", unitCost: 6000, tier: "Em-One", volumeReduction: 0 },
-    { name: "Paint - Tier 3", unitCost: 4000, tier: "Em-Pro", volumeReduction: 0 },
-    { name: "Paint - Tier 4", unitCost: 3500, tier: "Em-Star", volumeReduction: 0 },
-    { name: "Utilities - Variable", unitCost: 2594, all: true, volumeReduction: 0 },
-    { name: "Direct Labor", unitCost: 1800, all: true, volumeReduction: 0 },
-    { name: "Packaging", unitCost: 900, all: true, volumeReduction: 0 }
-  ]);
-  
-  // Changed from static to state
+  const [modelVersion, setModelVersion] = useState(0);
+
+  // Financial state
   const [financialData, setFinancialData] = useState<FinancialData[]>([]);
-  
-  // Financial metrics state
   const [metrics, setMetrics] = useState({
     npv: 0,
     irr: 0,
@@ -170,44 +138,17 @@ const EmpowerModel = () => {
     breakEvenVolume: 0,
     breakEvenCapacity: 0
   });
-  
-  // Add this to your existing state declarations
-  const [loans, setLoans] = useState([
-    {
-      name: "PPGL Machine Loan",
-      amount: 360000000,
-      bank: "BBL",
-      interestRate: 5.5,  // MLR - 0.5%
-      term: 84,  // 7 years in months
-      startDate: "2023-01",
-      type: "machine"
-    },
-    {
-      name: "Building Loan",
-      amount: 213000000,
-      bank: "KBank",
-      interestRate: 5.0,  // MLR - 1.0%
-      term: 180,  // 15 years in months
-      startDate: "2023-01",
-      type: "building"
-    }
-  ]);
-  
-  // Add this to your existing state declarations
-  const [capacityGrowth, setCapacityGrowth] = useState(10); // Default 10% annual growth
-  
-  // Add new state for year configuration
-  const [yearConfig, setYearConfig] = useState({
-    startYear: 2023,
-    duration: 35
-  });
-  
-  // Add this to your existing state
-  const [irrTimeframe, setIrrTimeframe] = useState(35); // Default to full period
-  
-  // Add local state for duration input
-  const [durationInput, setDurationInput] = useState(yearConfig.duration.toString());
-  
+
+  // Scenario state
+  const [scenario, setScenario] = useState<'base' | 'optimistic' | 'pessimistic'>('base');
+  const [originalParams, setOriginalParams] = useState<any>(null);
+  const [whatIf, setWhatIf] = useState({ price: 0, variable: 0, fixed: 0 });
+  const [scenarioBaseValues, setScenarioBaseValues] = useState<{
+    priceTiers: typeof priceTiers,
+    variableCosts: typeof variableCosts,
+    fixedCosts: typeof fixedCosts
+  } | null>(null);
+
   // Add this function to update years when configuration changes
   const updateYearRange = (startYear: number, duration: number) => {
     setYearConfig({ startYear, duration });
@@ -218,7 +159,7 @@ const EmpowerModel = () => {
       years
     }));
   };
-  
+
   // This would process the actual Excel data in a real implementation
   useEffect(() => {
     // Simulate loading the Excel data
@@ -228,7 +169,7 @@ const EmpowerModel = () => {
       setLoading(false);
     }, 1000);
   }, []);
-  
+
   // Add a useEffect to ensure initial calculation and updates
   useEffect(() => {
     if (!loading) {
@@ -250,7 +191,7 @@ const EmpowerModel = () => {
     irrTimeframe,
     loading
   ]);
-  
+
   // Add this useEffect
   useEffect(() => {
     // Ensure IRR timeframe doesn't exceed the projection duration
@@ -258,7 +199,35 @@ const EmpowerModel = () => {
       setIrrTimeframe(yearConfig.duration);
     }
   }, [yearConfig.duration]);
-  
+
+  // Add this useEffect to sync durationInput with yearConfig.duration
+  useEffect(() => {
+    setDurationInput(yearConfig.duration.toString());
+  }, [yearConfig.duration]);
+
+  // Add this useEffect to reset to default values
+  useEffect(() => {
+    // Reset all states using defaultParameters
+    setModelData(defaultParameters.modelData);
+    setYearConfig(defaultParameters.yearConfig);
+    setCapacityUsage(defaultParameters.capacityUsage);
+    setCapacityGrowth(defaultParameters.capacityGrowth);
+    setPriceTiers(defaultParameters.priceTiers);
+    setPriceGrowth(defaultParameters.priceGrowth);
+    setFixedCosts(defaultParameters.fixedCosts);
+    setVariableCosts(defaultParameters.variableCosts);
+    setLoans(defaultParameters.loans);
+    setIrrTimeframe(defaultParameters.yearConfig.duration);
+
+    // Show success message
+    setSaveStatus({
+      show: true,
+      message: 'Model reset to default values successfully!',
+      type: 'success'
+    });
+    setTimeout(() => setSaveStatus(prev => ({ ...prev, show: false })), 3000);
+  }, [defaultParameters.modelData, defaultParameters.yearConfig, defaultParameters.capacityUsage, defaultParameters.capacityGrowth, defaultParameters.priceTiers, defaultParameters.priceGrowth, defaultParameters.fixedCosts, defaultParameters.variableCosts, defaultParameters.loans, defaultParameters.yearConfig.duration]);
+
   // Update calculateProjections function to properly handle costs and cash flows
   const calculateProjections = (weightedPrice: number, monthlyFixedCost: number) => {
     const projections = [];
@@ -693,8 +662,6 @@ const EmpowerModel = () => {
     }
   };
 
-  const [modelVersion, setModelVersion] = useState(0);
-
   const loadModel = () => {
     try {
       const savedModel = localStorage.getItem('empowerModel');
@@ -789,93 +756,6 @@ const EmpowerModel = () => {
     }
   };
 
-  // Sync durationInput with yearConfig.duration if it changes elsewhere
-  useEffect(() => {
-    setDurationInput(yearConfig.duration.toString());
-  }, [yearConfig.duration]);
-
-  // Add this function to reset to default values
-  const resetToDefault = () => {
-    // Reset model data
-    setModelData({
-      capacity: 10000,
-      capacityAnnual: 120000,
-      years: Array.from({ length: 10 }, (_, i) => 2023 + i),
-    });
-
-    // Reset other states
-    setCapacityUsage(75);
-    setCapacityGrowth(10);
-    setPriceTiers([
-      { name: "Em-Unique", price: 40000, percentage: 20 },
-      { name: "Em-One", price: 45000, percentage: 30 },
-      { name: "Em-Pro", price: 48000, percentage: 35 },
-      { name: "Em-Star", price: 52000, percentage: 15 }
-    ]);
-    setPriceGrowth(2.0);
-    setFixedCosts([
-      { name: "Building Depreciation", cost: 20800000, annual: true, type: "depreciation", years: 25, startYear: 2023 },
-      { name: "PPGL Machine Depreciation", cost: 22500000, annual: true, type: "depreciation", years: 20, startYear: 2023 },
-      { name: "Soft Cost Depreciation", cost: 1000000, annual: true, type: "depreciation", years: 20, startYear: 2023 },
-      { name: "Administrative Staff", cost: 1500000, monthly: true, type: "regular" },
-      { name: "Utilities - Fixed", cost: 800000, monthly: true, type: "regular" },
-      { name: "Maintenance Contract", cost: 650000, monthly: true, type: "regular" },
-      { name: "Insurance", cost: 450000, monthly: true, type: "regular" },
-      { name: "Other Fixed Costs", cost: 350000, monthly: true, type: "regular" }
-    ]);
-    setVariableCosts([
-      { name: "Raw Materials - Tier 1", unitCost: 42000, tier: "Em-Unique", volumeReduction: 0 },
-      { name: "Raw Materials - Tier 2", unitCost: 39000, tier: "Em-One", volumeReduction: 0 },
-      { name: "Raw Materials - Tier 3", unitCost: 36000, tier: "Em-Pro", volumeReduction: 0 },
-      { name: "Raw Materials - Tier 4", unitCost: 33000, tier: "Em-Star", volumeReduction: 0 },
-      { name: "Paint - Tier 1", unitCost: 7000, tier: "Em-Unique", volumeReduction: 0 },
-      { name: "Paint - Tier 2", unitCost: 6000, tier: "Em-One", volumeReduction: 0 },
-      { name: "Paint - Tier 3", unitCost: 4000, tier: "Em-Pro", volumeReduction: 0 },
-      { name: "Paint - Tier 4", unitCost: 3500, tier: "Em-Star", volumeReduction: 0 },
-      { name: "Utilities - Variable", unitCost: 2594, all: true, volumeReduction: 0 },
-      { name: "Direct Labor", unitCost: 1800, all: true, volumeReduction: 0 },
-      { name: "Packaging", unitCost: 900, all: true, volumeReduction: 0 }
-    ]);
-    setLoans([
-      {
-        name: "PPGL Machine Loan",
-        amount: 360000000,
-        bank: "BBL",
-        interestRate: 5.5,
-        term: 84,
-        startDate: "2023-01",
-        type: "machine"
-      },
-      {
-        name: "Building Loan",
-        amount: 213000000,
-        bank: "KBank",
-        interestRate: 5.0,
-        term: 180,
-        startDate: "2023-01",
-        type: "building"
-      }
-    ]);
-    setYearConfig({
-      startYear: 2023,
-      duration: 35
-    });
-    setIrrTimeframe(35);
-
-    // Show success message
-    setSaveStatus({
-      show: true,
-      message: 'Model reset to default values successfully!',
-      type: 'success'
-    });
-    setTimeout(() => setSaveStatus(prev => ({ ...prev, show: false })), 3000);
-
-    // Recalculate metrics
-    // setTimeout(() => {
-    //   calculateMetrics();
-    // }, 100);
-  };
-
   // Add this helper function to calculate effective variable cost
   const calculateEffectiveVariableCost = (cost: SavedModel['variableCosts'][0], monthlyVolume: number) => {
     if (!cost.volumeReduction || cost.volumeReduction === 0) return cost.unitCost;
@@ -885,10 +765,6 @@ const EmpowerModel = () => {
     // Ensure cost doesn't go below 0
     return Math.max(0, cost.unitCost * reductionFactor);
   };
-
-  // Scenario state
-  const [scenario, setScenario] = useState<'base' | 'optimistic' | 'pessimistic'>('base');
-  const [originalParams, setOriginalParams] = useState<any>(null);
 
   // Scenario handler
   const handleScenarioChange = (newScenario: 'base' | 'optimistic' | 'pessimistic') => {
@@ -937,15 +813,6 @@ const EmpowerModel = () => {
     setScenario(newScenario);
   };
 
-  // What-if quick input state
-  const [whatIf, setWhatIf] = useState({ price: 0, variable: 0, fixed: 0 });
-  // Store the scenario base values to prevent compounding
-  const [scenarioBaseValues, setScenarioBaseValues] = useState<{
-    priceTiers: typeof priceTiers,
-    variableCosts: typeof variableCosts,
-    fixedCosts: typeof fixedCosts
-  } | null>(null);
-
   // Update scenario base values when scenario changes
   useEffect(() => {
     setScenarioBaseValues({
@@ -991,6 +858,29 @@ const EmpowerModel = () => {
     } else if (scenario === 'pessimistic') {
       setWhatIf({ price: 0, variable: 7, fixed: 5 });
     }
+  };
+
+  // Add this function to reset to default values
+  const resetToDefault = () => {
+    // Reset all states using defaultParameters
+    setModelData(defaultParameters.modelData);
+    setYearConfig(defaultParameters.yearConfig);
+    setCapacityUsage(defaultParameters.capacityUsage);
+    setCapacityGrowth(defaultParameters.capacityGrowth);
+    setPriceTiers(defaultParameters.priceTiers);
+    setPriceGrowth(defaultParameters.priceGrowth);
+    setFixedCosts(defaultParameters.fixedCosts);
+    setVariableCosts(defaultParameters.variableCosts);
+    setLoans(defaultParameters.loans);
+    setIrrTimeframe(defaultParameters.yearConfig.duration);
+
+    // Show success message
+    setSaveStatus({
+      show: true,
+      message: 'Model reset to default values successfully!',
+      type: 'success'
+    });
+    setTimeout(() => setSaveStatus(prev => ({ ...prev, show: false })), 3000);
   };
 
   if (loading) {
