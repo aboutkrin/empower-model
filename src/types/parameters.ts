@@ -53,4 +53,5 @@ export interface Parameters {
   fixedCosts: FixedCost[];
   variableCosts: VariableCost[];
   loans: Loan[];
+  yieldLoss: number; // Percentage of yield loss
 } 

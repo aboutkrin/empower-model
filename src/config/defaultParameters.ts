@@ -285,5 +285,6 @@ export const defaultParameters: Parameters = {
       startDate: "2024-03",
       type: "other"
     }
-  ]
+  ],
+  yieldLoss: 2
 } as const; 

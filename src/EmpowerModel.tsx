@@ -3,6 +3,10 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, L
 import { ModelConfig } from './types';
 import { defaultParameters } from './config/defaultParameters';
 import { Parameters, FixedCost, VariableCost, Loan } from './types/parameters';
+import ModelParametersModal from './ModelParametersModal';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
+import autoTable from 'jspdf-autotable';
 
 // Add TypeScript interfaces for better type safety
 interface SavedModel {
@@ -138,7 +142,7 @@ const EmpowerModel = () => {
     breakEvenVolume: 0,
     breakEvenCapacity: 0
   });
-
+  
   // Scenario state
   const [scenario, setScenario] = useState<'base' | 'optimistic' | 'pessimistic'>('base');
   const [originalParams, setOriginalParams] = useState<any>(null);
@@ -149,6 +153,12 @@ const EmpowerModel = () => {
     fixedCosts: typeof fixedCosts
   } | null>(null);
 
+  // Add state for simulated volume in Product Cost Analysis
+  const [simulatedVolume, setSimulatedVolume] = useState<{ [tier: string]: number | null }>({});
+  
+  // Add this with the other state declarations
+  const [yieldLoss, setYieldLoss] = useState<number>(defaultParameters.yieldLoss);
+  
   // Add this function to update years when configuration changes
   const updateYearRange = (startYear: number, duration: number) => {
     setYearConfig({ startYear, duration });
@@ -159,7 +169,7 @@ const EmpowerModel = () => {
       years
     }));
   };
-
+  
   // This would process the actual Excel data in a real implementation
   useEffect(() => {
     // Simulate loading the Excel data
@@ -169,7 +179,7 @@ const EmpowerModel = () => {
       setLoading(false);
     }, 1000);
   }, []);
-
+  
   // Add a useEffect to ensure initial calculation and updates
   useEffect(() => {
     if (!loading) {
@@ -189,9 +199,10 @@ const EmpowerModel = () => {
     modelData.years,
     loans,
     irrTimeframe,
-    loading
+    loading,
+    yieldLoss  // Add yieldLoss to dependencies
   ]);
-
+  
   // Add this useEffect
   useEffect(() => {
     // Ensure IRR timeframe doesn't exceed the projection duration
@@ -227,7 +238,7 @@ const EmpowerModel = () => {
     });
     setTimeout(() => setSaveStatus(prev => ({ ...prev, show: false })), 3000);
   }, [defaultParameters.modelData, defaultParameters.yearConfig, defaultParameters.capacityUsage, defaultParameters.capacityGrowth, defaultParameters.priceTiers, defaultParameters.priceGrowth, defaultParameters.fixedCosts, defaultParameters.variableCosts, defaultParameters.loans, defaultParameters.yearConfig.duration]);
-
+  
   // Update calculateProjections function to properly handle costs and cash flows
   const calculateProjections = (weightedPrice: number, monthlyFixedCost: number) => {
     const projections = [];
@@ -433,18 +444,31 @@ const EmpowerModel = () => {
     
     // Function to calculate total variable cost for a given volume
     const calculateTotalVariableCost = (volume: number) => {
-      return variableCosts.reduce((sum, cost) => {
-        const effectiveUnitCost = calculateEffectiveVariableCost(cost, volume);
+      // Apply yield loss to the volume first
+      const effectiveVolume = volume / (1 - yieldLoss / 100);
+      
+      return variableCosts.reduce((total, cost) => {
+        // Calculate effective cost per unit including yield loss
+        const effectiveUnitCost = calculateEffectiveVariableCost(cost, effectiveVolume);
+        
+        // Calculate total cost for this variable cost item
+        let costTotal = 0;
+        
         if (cost.all) {
-          return sum + effectiveUnitCost;
-        } else {
-          const matchingTier = priceTiers.find(tier => tier.name === cost.tier);
-          if (matchingTier) {
-            return sum + (effectiveUnitCost * (matchingTier.percentage / 100));
+          // If cost applies to all tiers, apply to total volume
+          costTotal = effectiveUnitCost * effectiveVolume;
+        } else if (cost.tier) {
+          // If cost applies to specific tier, find the tier's volume
+          const tier = priceTiers.find(t => t.name === cost.tier);
+          if (tier) {
+            const tierVolume = (volume * tier.percentage) / 100;
+            const effectiveTierVolume = tierVolume / (1 - yieldLoss / 100);
+            costTotal = effectiveUnitCost * effectiveTierVolume;
           }
         }
-        return sum;
-    }, 0);
+        
+        return total + costTotal;
+      }, 0);
     };
 
     // Find break-even volume using binary search
@@ -758,12 +782,15 @@ const EmpowerModel = () => {
 
   // Add this helper function to calculate effective variable cost
   const calculateEffectiveVariableCost = (cost: SavedModel['variableCosts'][0], monthlyVolume: number) => {
-    if (!cost.volumeReduction || cost.volumeReduction === 0) return cost.unitCost;
+    // First apply volume-based reduction if applicable
+    let reducedCost = cost.unitCost;
+    if (cost.volumeReduction && cost.volumeReduction > 0) {
+      const volumeReduction = cost.volumeReduction * (monthlyVolume / 1000);
+      reducedCost = cost.unitCost * (1 - volumeReduction / 100);
+    }
     
-    // Calculate reduction based on volume (per 1000 tons)
-    const reductionFactor = 1 - ((monthlyVolume / 1000) * (cost.volumeReduction / 100));
-    // Ensure cost doesn't go below 0
-    return Math.max(0, cost.unitCost * reductionFactor);
+    // Then apply yield loss to the reduced cost
+    return reducedCost / (1 - yieldLoss / 100);
   };
 
   // Scenario handler
@@ -883,12 +910,299 @@ const EmpowerModel = () => {
     setTimeout(() => setSaveStatus(prev => ({ ...prev, show: false })), 3000);
   };
 
+  const [isParamsModalOpen, setParamsModalOpen] = useState(false);
+
   if (loading) {
   };
 
   if (loading) {
     return <div className="flex justify-center items-center h-screen">Loading model data...</div>;
   }
+
+  // Helper function to export a DOM node as PDF
+  const exportTabToPDF = async (tabName: string) => {
+    const content = document.getElementById('main-content-area');
+    if (!content) return;
+    const canvas = await html2canvas(content, { scale: 2 });
+    const imgData = canvas.toDataURL('image/png');
+    const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    // Fit image to page
+    const imgWidth = pageWidth - 40;
+    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+    pdf.text(`${tabName} - EM-FinCast`, 30, 30);
+    pdf.addImage(imgData, 'PNG', 20, 40, imgWidth, imgHeight);
+    pdf.save(`EM-FinCast-${tabName.replace(/\s+/g, '-')}.pdf`);
+  };
+
+  // Helper function to generate a professional PDF report
+  const generateReportPDF = async () => {
+    const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    let y = 40;
+
+    // 1. Cover Page
+    pdf.setFontSize(28);
+    pdf.text('EM-FinCast Financial Model Report', pageWidth / 2, y, { align: 'center' });
+    pdf.setFontSize(16);
+    y += 40;
+    pdf.text(`Date: ${new Date().toLocaleDateString()}`, pageWidth / 2, y, { align: 'center' });
+    y += 30;
+    pdf.setFontSize(12);
+    pdf.text('This report summarizes the key results, projections, and cost analysis for your financial model.', pageWidth / 2, y, { align: 'center' });
+    pdf.addPage();
+    y = 40;
+
+    // 2. Key Metrics
+    pdf.setFontSize(18);
+    pdf.text('Key Metrics', 40, y);
+    y += 20;
+    pdf.setFontSize(12);
+    autoTable(pdf, {
+      startY: y,
+      head: [['NPV (M THB)', 'IRR (%)', 'Payback Period (Years)', 'Break-even Year', 'Weighted Price (THB/ton)', 'Contribution Margin (THB/ton)']],
+      body: [[
+        metrics.npv.toLocaleString(),
+        metrics.irr ? metrics.irr.toFixed(2) : 'N/A',
+        metrics.paybackPeriod && isFinite(metrics.paybackPeriod) ? metrics.paybackPeriod.toFixed(2) : 'No Payback',
+        metrics.breakEvenYear ? Math.ceil(yearConfig.startYear + metrics.breakEvenYear) : 'N/A',
+        metrics.weightedPrice.toLocaleString(),
+        metrics.contributionMargin.toLocaleString()
+      ]],
+      theme: 'grid',
+      styles: { fontSize: 11 },
+      margin: { left: 40, right: 40 }
+    });
+    y = (pdf as any).lastAutoTable ? (pdf as any).lastAutoTable.finalY + 30 : y + 30;
+
+    // 3. Financial Projections Table
+    pdf.setFontSize(16);
+    pdf.text('Financial Projections', 40, y);
+    y += 10;
+    autoTable(pdf, {
+      startY: y,
+      head: [['Year', 'Revenue (M THB)', 'Operating Profit (M THB)', 'Net Cash Flow (M THB)']],
+      body: financialData.map(row => [
+        row.year,
+        row.revenue.toLocaleString(),
+        row.operatingProfit.toLocaleString(),
+        row.netCashFlow.toLocaleString()
+      ]),
+      theme: 'striped',
+      styles: { fontSize: 10 },
+      margin: { left: 40, right: 40 }
+    });
+    y = (pdf as any).lastAutoTable ? (pdf as any).lastAutoTable.finalY + 30 : y + 30;
+
+    // 4. Product Cost Analysis (all products)
+    pdf.setFontSize(16);
+    pdf.text('Product Cost Analysis', 40, y);
+    y += 10;
+    priceTiers.forEach((tier, idx) => {
+      const monthlyVolume = modelData.capacity * (capacityUsage / 100) * (tier.percentage / 100);
+      const productVariableCosts = variableCosts
+        .filter(cost => cost.tier === tier.name || cost.all)
+        .map(cost => {
+          const unitCost = calculateEffectiveVariableCost(cost, monthlyVolume);
+          return {
+            name: cost.name,
+            unitCost,
+            totalCost: unitCost * monthlyVolume,
+            percentageOfPrice: (unitCost / tier.price) * 100
+          };
+        });
+      const totalFixedCosts = fixedCosts.reduce((sum, cost) => {
+        if (cost.monthly) return sum + cost.cost;
+        if (cost.annual) return sum + (cost.cost / 12);
+        return sum;
+      }, 0);
+      const allocatedFixedCost = (totalFixedCosts * (tier.percentage / 100)) / monthlyVolume;
+      const totalVariableCost = productVariableCosts.reduce((sum, cost) => sum + cost.unitCost, 0);
+      const contributionMargin = tier.price - totalVariableCost;
+      const totalCost = totalVariableCost + allocatedFixedCost;
+      const margin = tier.price - totalCost;
+      const marginPercentage = (margin / tier.price) * 100;
+      y = (pdf as any).lastAutoTable ? (pdf as any).lastAutoTable.finalY + 20 : y + 20;
+      pdf.setFontSize(13);
+      pdf.text(`${tier.name} (Monthly Volume: ${monthlyVolume.toLocaleString()} tons)`, 50, y);
+      y += 10;
+      autoTable(pdf, {
+        startY: y,
+        head: [['Price', 'Variable Cost', 'Allocated Fixed Cost', 'Total Cost', 'Margin', 'Margin %']],
+        body: [[
+          tier.price.toLocaleString(),
+          totalVariableCost.toLocaleString(),
+          allocatedFixedCost.toLocaleString(),
+          totalCost.toLocaleString(),
+          margin.toLocaleString(),
+          marginPercentage.toFixed(1) + '%'
+        ]],
+        theme: 'plain',
+        styles: { fontSize: 10 },
+        margin: { left: 50, right: 40 }
+      });
+      y = (pdf as any).lastAutoTable ? (pdf as any).lastAutoTable.finalY + 5 : y + 5;
+      autoTable(pdf, {
+        startY: y,
+        head: [['Cost Component', 'Unit Cost', 'Total Cost', '% of Price']],
+        body: productVariableCosts.map(cost => [
+          cost.name,
+          cost.unitCost.toLocaleString(),
+          cost.totalCost.toLocaleString(),
+          cost.percentageOfPrice.toFixed(1) + '%'
+        ]),
+        theme: 'striped',
+        styles: { fontSize: 9 },
+        margin: { left: 60, right: 40 }
+      });
+      y = (pdf as any).lastAutoTable ? (pdf as any).lastAutoTable.finalY + 10 : y + 10;
+    });
+
+    // 5. (Optional) Add a chart image (e.g., Financial Projections)
+    // Try to find a chart by id and add as image
+    const chartNode = document.querySelector('.recharts-wrapper');
+    if (chartNode) {
+      const chartCanvas = await html2canvas(chartNode as HTMLElement, { scale: 2 });
+      const imgData = chartCanvas.toDataURL('image/png');
+      pdf.addPage();
+      pdf.setFontSize(16);
+      pdf.text('Key Chart Example', 40, 40);
+      pdf.addImage(imgData, 'PNG', 40, 60, 700, 300);
+    }
+
+    // 6. Appendix: Model Parameters
+    pdf.addPage();
+    y = 40;
+    pdf.setFontSize(16);
+    pdf.text('Appendix: Model Parameters', 40, y);
+    y += 10;
+    autoTable(pdf, {
+      startY: y,
+      head: [['Parameter', 'Value']],
+      body: [
+        ['Capacity (tons/month)', modelData.capacity.toLocaleString()],
+        ['Capacity Usage (%)', capacityUsage],
+        ['Capacity Growth (%)', capacityGrowth],
+        ['Price Growth (%)', priceGrowth],
+        ['Projection Duration (years)', yearConfig.duration],
+        ['Start Year', yearConfig.startYear],
+        ['IRR Timeframe (years)', irrTimeframe],
+      ],
+      theme: 'plain',
+      styles: { fontSize: 10 },
+      margin: { left: 40, right: 40 }
+    });
+
+    pdf.save(`EM-FinCast-Report.pdf`);
+  };
+
+  const calculateYieldLossImpact = (baseVolume: number, baseCost: number) => {
+    const scenarios = [
+      { yieldLoss: 0, label: 'No Yield Loss' },
+      { yieldLoss: yieldLoss, label: 'Current Yield Loss' },
+      { yieldLoss: yieldLoss * 2, label: 'Double Current Loss' }
+    ];
+
+    return scenarios.map(scenario => {
+      const effectiveVolume = baseVolume / (1 - scenario.yieldLoss / 100);
+      const effectiveCost = baseCost / (1 - scenario.yieldLoss / 100);
+      const totalCost = effectiveVolume * effectiveCost;
+      const costIncrease = ((effectiveCost - baseCost) / baseCost) * 100;
+
+      return {
+        scenario: scenario.label,
+        baseVolume,
+        effectiveVolume: Math.round(effectiveVolume * 100) / 100,
+        baseCost,
+        effectiveCost: Math.round(effectiveCost * 100) / 100,
+        totalCost: Math.round(totalCost * 100) / 100,
+        costIncrease: Math.round(costIncrease * 100) / 100
+      };
+    });
+  };
+
+  // Add this to your component's JSX where you want to display the impact
+  const YieldLossImpactCard = () => {
+    const baseVolume = modelData.capacity * (capacityUsage / 100); // Use actual monthly volume
+    const baseCost = variableCosts.reduce((sum, cost) => {
+      if (cost.all) return sum + cost.unitCost;
+      return sum;
+    }, 0) / variableCosts.length; // Average unit cost
+
+    const impact = calculateYieldLossImpact(baseVolume, baseCost);
+
+    return (
+      <div className="bg-white rounded-lg shadow p-6 mb-6">
+        <h3 className="text-lg font-semibold mb-4">Yield Loss Impact Analysis</h3>
+        <div className="overflow-x-auto">
+          <table className="min-w-full">
+            <thead>
+              <tr className="bg-gray-50">
+                <th className="px-4 py-2 text-left">Scenario</th>
+                <th className="px-4 py-2 text-right">Base Volume (tons)</th>
+                <th className="px-4 py-2 text-right">Effective Volume (tons)</th>
+                <th className="px-4 py-2 text-right">Base Cost (THB/ton)</th>
+                <th className="px-4 py-2 text-right">Effective Cost (THB/ton)</th>
+                <th className="px-4 py-2 text-right">Total Cost (THB)</th>
+                <th className="px-4 py-2 text-right">Cost Increase (%)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {impact.map((row, index) => (
+                <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                  <td className="px-4 py-2">{row.scenario}</td>
+                  <td className="px-4 py-2 text-right">{formatNumber(row.baseVolume)}</td>
+                  <td className="px-4 py-2 text-right">{formatNumber(row.effectiveVolume)}</td>
+                  <td className="px-4 py-2 text-right">{formatNumber(row.baseCost)}</td>
+                  <td className="px-4 py-2 text-right">{formatNumber(row.effectiveCost)}</td>
+                  <td className="px-4 py-2 text-right">{formatNumber(row.totalCost)}</td>
+                  <td className="px-4 py-2 text-right">{row.costIncrease}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-4 text-sm text-gray-600">
+          <p>* Effective Volume represents the amount of material needed to achieve the base volume after yield loss</p>
+          <p>* Cost Increase shows how much more expensive each unit becomes due to yield loss</p>
+          <p>* Current yield loss is set to {yieldLoss}%</p>
+        </div>
+      </div>
+    );
+  };
+
+  const MetricsCard = () => (
+    <div className="bg-white rounded-lg shadow p-6">
+      <h3 className="text-lg font-semibold mb-4">Key Metrics</h3>
+      <div className="space-y-4">
+        <div>
+          <div className="text-sm text-gray-500">NPV</div>
+          <div className="text-2xl font-bold">{formatNumber(metrics.npv)} M THB</div>
+          <div className="text-sm text-gray-500">{`${yearConfig.duration} year projection`}</div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const IRRCard = () => (
+    <div className="bg-white rounded-lg shadow p-6">
+      <h3 className="text-lg font-semibold mb-4">IRR</h3>
+      <div className="flex items-center gap-2">
+        <div className="text-2xl font-bold">
+          {metrics.irr > 0 ? `${metrics.irr.toFixed(2)}%` : 'Not Calculable'}
+        </div>
+        {metrics.irr <= 0 && (
+          <div className="text-sm text-red-500">
+            {`Project does not generate positive returns in ${yearConfig.duration} years`}
+          </div>
+        )}
+      </div>
+      <div className="text-sm text-gray-500">
+        {`${yearConfig.duration} year projection`}
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex flex-col bg-gray-100 min-h-screen">
@@ -921,6 +1235,12 @@ const EmpowerModel = () => {
               onClick={resetToDefault}
             >
               Reset to Default
+            </button>
+            <button
+              className="bg-indigo-500 hover:bg-indigo-600 text-white px-6 py-2 rounded-lg font-medium shadow-sm"
+              onClick={() => setParamsModalOpen(true)}
+            >
+              Model Parameters
             </button>
           </div>
           
@@ -966,6 +1286,12 @@ const EmpowerModel = () => {
               className="btn btn-secondary"
             >
               Export Model
+            </button>
+            <button
+              onClick={generateReportPDF}
+              className="btn btn-secondary"
+            >
+              Export PDF
             </button>
             
             <div className="relative">
@@ -1067,253 +1393,7 @@ const EmpowerModel = () => {
         </button>
       </div>
 
-      <div className="flex flex-col md:flex-row flex-1">
-        {/* Parameters Panel - Only shown on dashboard tab */}
-        {activeTab === 'dashboard' && (
-        <aside className="lg:w-80">
-          <div className="card sticky top-24 space-y-6">
-            <h2 className="text-xl font-bold mb-6">Model Parameters</h2>
-
-            {/* Capacity Configuration */}
-            <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
-              <h3 className="text-sm font-semibold text-gray-700 mb-4">Capacity Settings</h3>
-              
-              {/* Monthly Capacity */}
-          <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-600 mb-1">
-                  Monthly Capacity (tons)
-            </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={formatInputNumber(modelData.capacity.toString())}
-                    onChange={(e) => {
-                      const newCapacity = parseFormattedNumber(e.target.value);
-                      setModelData({
-                        ...modelData,
-                        capacity: newCapacity,
-                        capacityAnnual: newCapacity * 12
-                      });
-                    }}
-                    className="input text-right"
-                  />
-                  <span className="text-sm text-gray-500">tons/month</span>
-                </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  Annual: {formatNumber(modelData.capacityAnnual)} tons/year
-                </p>
-              </div>
-
-              {/* Initial Capacity Usage */}
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-600 mb-1">
-                  Initial Capacity Usage ({yearConfig.startYear})
-                </label>
-                <div className="flex items-center gap-4">
-            <input
-              type="range"
-                    min="0"
-              max="100"
-              value={capacityUsage}
-              onChange={(e) => setCapacityUsage(parseInt(e.target.value))}
-                    className="flex-1"
-                  />
-                  <div className="flex items-center gap-2">
-                    <input 
-                      type="number"
-                      min="0"
-                      max="100"
-                      value={capacityUsage}
-                      onChange={(e) => {
-                        const value = Math.min(100, Math.max(0, parseInt(e.target.value) || 0));
-                        setCapacityUsage(value);
-                      }}
-                      className="input w-16 text-right"
-                    />
-                    <span className="text-sm font-medium text-gray-900">%</span>
-                  </div>
-                </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  {yearConfig.startYear} Volume: {formatNumber(modelData.capacity * (capacityUsage / 100))} tons/month
-                </div>
-          </div>
-
-              {/* Capacity Growth Rate */}
-          <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-600 mb-1">
-                  Annual Capacity Growth Rate
-                </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0"
-                    max="100"
-                    value={capacityGrowth}
-                    onChange={(e) => setCapacityGrowth(parseFloat(e.target.value))}
-                    className="input text-right"
-                  />
-                  <span className="text-sm text-gray-500">% per year</span>
-                </div>
-              </div>
-
-              {/* Projected Capacity Table */}
-              <div className="mt-4">
-                <h4 className="text-sm font-medium text-gray-600 mb-2">Projected Capacity Usage</h4>
-                <div className="bg-white rounded border border-gray-200 overflow-x-auto max-h-96">
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-gray-50">
-                      <tr>
-                        <th className="py-2 px-3 text-left text-xs font-medium text-gray-500 sticky left-0 bg-gray-50">Year</th>
-                        <th className="py-2 px-3 text-right text-xs font-medium text-gray-500">Usage %</th>
-                        <th className="py-2 px-3 text-right text-xs font-medium text-gray-500">Monthly (tons)</th>
-                        <th className="py-2 px-3 text-right text-xs font-medium text-gray-500">Annual (tons)</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Array.from({ length: yearConfig.duration }, (_, i) => yearConfig.startYear + i).map((year, index) => {
-                        const yearlyCapacityUsage = calculateYearlyCapacityUsage(year);
-                        const monthlyVolume = modelData.capacity * (yearlyCapacityUsage / 100);
-                        const annualVolume = monthlyVolume * 12;
-                        
-                        return (
-                          <tr key={year} className={index % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
-                            <td className="py-2 px-3 sticky left-0 font-medium" style={{ backgroundColor: index % 2 === 0 ? '#f9fafb' : '#ffffff' }}>
-                              {year}
-                            </td>
-                            <td className="py-2 px-3 text-right">
-                              {formatNumber(yearlyCapacityUsage)}%
-                            </td>
-                            <td className="py-2 px-3 text-right">
-                              {formatNumber(monthlyVolume)}
-                            </td>
-                            <td className="py-2 px-3 text-right">
-                              {formatNumber(annualVolume)}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Year Range Configuration */}
-              <div className="mb-4">
-                <h4 className="text-sm font-semibold text-gray-700 mb-2">Projection Period</h4>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">
-                      Start Year
-                    </label>
-                    <input
-                      type="number"
-                      value={yearConfig.startYear}
-                      onChange={(e) => {
-                        const newStartYear = parseInt(e.target.value);
-                        updateYearRange(newStartYear, yearConfig.duration);
-                      }}
-                      className="input text-right"
-                      min="2023"
-                      max="2050"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="duration" className="form-label">
-                      Duration (Yr)
-                    </label>
-                    <input
-                      id="duration"
-                      type="number"
-                      value={durationInput}
-                      onChange={handleDurationChange}
-                      className="input text-right" // match Start Year
-                      min="1"
-                      max="50"
-                      step="1"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Rest of your existing parameters */}
-            {/* Product Tiers */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-              Product Tiers
-            </label>
-              <div className="space-y-3">
-            {priceTiers.map((tier, index) => (
-                  <div key={index} className="flex items-center gap-2">
-                    <select
-                      value={tier.name}
-                      onChange={(e) => {
-                        const newTiers = [...priceTiers];
-                        newTiers[index].name = e.target.value;
-                        setPriceTiers(newTiers);
-                      }}
-                      className="input text-sm flex-1"
-                    >
-                      {AVAILABLE_PRODUCT_TIERS.map(name => (
-                        <option key={name} value={name}>{name}</option>
-                      ))}
-                    </select>
-                  <input
-                    type="text"
-                    value={formatInputNumber(tier.price.toString())}
-                    onChange={(e) => {
-                      const newTiers = [...priceTiers];
-                      newTiers[index].price = parseFormattedNumber(e.target.value);
-                      setPriceTiers(newTiers);
-                    }}
-                      className="input text-sm w-28"
-                  />
-                  <input
-                    type="number"
-                    value={tier.percentage}
-                    onChange={(e) => {
-                      const newTiers = [...priceTiers];
-                      newTiers[index].percentage = parseInt(e.target.value);
-                      setPriceTiers(newTiers);
-                    }}
-                      className="input text-sm w-16"
-                  />
-              </div>
-            ))}
-            <div className="mt-2 text-sm">
-                      <span>
-                Total Product Mix:&nbsp;
-                <span className={totalProductMix > 100 ? "text-red-600 font-bold" : "text-green-700 font-semibold"}>
-                  {totalProductMix}%
-                      </span>
-                {totalProductMix > 100 && (
-                  <span className="ml-2 text-xs text-red-500 font-semibold">
-                    (Should not exceed 100%)
-                  </span>
-                )}
-              </span>
-            </div>
-            </div>
-          </div>
-
-            {/* Price Growth */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-              Price Growth (% per year)
-            </label>
-            <input
-              type="number"
-              step="0.1"
-              value={priceGrowth}
-              onChange={(e) => setPriceGrowth(parseFloat(e.target.value))}
-                className="input"
-            />
-          </div>
-        </div>
-        </aside>
-        )}
-
+      <div className="flex flex-col md:flex-row flex-1" id="main-content-area">
         {/* Main Content Area */}
         <div className="flex-1 p-4">
           {activeTab === 'dashboard' && (
@@ -1353,52 +1433,12 @@ const EmpowerModel = () => {
                 <button className="btn btn-secondary" onClick={resetWhatIf}>Reset</button>
               </div>
               {/* NPV, IRR, Payback */}
-              <div className="grid grid-cols-3 gap-4 mb-8">
-                {/* NPV Card */}
-                <div className="card">
-                  <h3>Net Present Value</h3>
-                  <div className="text-2xl font-bold">
-                    {formatNumber(metrics.npv)} M THB
-                  </div>
-                  <div className="text-sm text-gray-500">
-                    {`${yearConfig.duration} year projection`}
-                  </div>
-                </div>
-                {/* IRR Card */}
-                <div className="card">
-                  <h3>IRR</h3>
-                  <div className="flex items-center gap-2">
-                    <div className="text-2xl font-bold">
-                      {metrics.irr > 0 ? `${metrics.irr.toFixed(2)}%` : 'Not Calculable'}
-                    </div>
-                    {metrics.irr <= 0 && (
-                      <div className="text-sm text-red-500">
-                        {`Project does not generate positive returns in ${yearConfig.duration} years`}
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-sm text-gray-500">
-                    {`${yearConfig.duration} year projection`}
-                  </div>
-                </div>
-                {/* Payback Period Card */}
-                <div className="card">
-                  <h3>Payback Period</h3>
-                  <div className="text-2xl font-bold">
-                    {metrics.paybackPeriod > 0 && metrics.paybackPeriod <= yearConfig.duration
-                      ? `${metrics.paybackPeriod.toFixed(2)} Years`
-                      : 'No Payback'}
-                  </div>
-                  <div className="text-sm text-gray-500">
-                    Year when cumulative cash flow becomes positive
-                  </div>
-                  {metrics.paybackPeriod > yearConfig.duration && (
-                    <div className="text-sm text-red-500">
-                      Investment not recovered in projection period
-                    </div>
-                  )}
-                </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <MetricsCard />
+                <PaybackPeriodCard />
+                <IRRCard />
               </div>
+              <YieldLossImpactCard />
               {/* Financial Projections */}
               <div className="card" key={modelVersion}>
                 <h3 className="text-lg font-bold mb-6">Financial Projections</h3>
@@ -1519,17 +1559,30 @@ const EmpowerModel = () => {
                     return sum;
                   }, 0);
                   const calculateTotalVariableCost = (volume: number) => {
-                    return variableCosts.reduce((sum, cost) => {
-                      const effectiveUnitCost = calculateEffectiveVariableCost(cost, volume);
+                    // Apply yield loss to the volume first
+                    const effectiveVolume = volume / (1 - yieldLoss / 100);
+                    
+                    return variableCosts.reduce((total, cost) => {
+                      // Calculate effective cost per unit including yield loss
+                      const effectiveUnitCost = calculateEffectiveVariableCost(cost, effectiveVolume);
+                      
+                      // Calculate total cost for this variable cost item
+                      let costTotal = 0;
+                      
                       if (cost.all) {
-                        return sum + effectiveUnitCost;
-                      } else {
-                        const matchingTier = priceTiers.find(tier => tier.name === cost.tier);
-                        if (matchingTier) {
-                          return sum + (effectiveUnitCost * (matchingTier.percentage / 100));
+                        // If cost applies to all tiers, apply to total volume
+                        costTotal = effectiveUnitCost * effectiveVolume;
+                      } else if (cost.tier) {
+                        // If cost applies to specific tier, find the tier's volume
+                        const tier = priceTiers.find(t => t.name === cost.tier);
+                        if (tier) {
+                          const tierVolume = (volume * tier.percentage) / 100;
+                          const effectiveTierVolume = tierVolume / (1 - yieldLoss / 100);
+                          costTotal = effectiveUnitCost * effectiveTierVolume;
                         }
                       }
-                      return sum;
+                      
+                      return total + costTotal;
                     }, 0);
                   };
                   let breakEvenVolume = null;
@@ -3695,38 +3748,6 @@ const EmpowerModel = () => {
               <div className="flex justify-between items-center">
                 <h2 className="text-xl font-bold">Product Cost Analysis</h2>
                 <div className="flex gap-4 items-center">
-                  {/* Volume Adjustment */}
-                  <div className="flex items-center gap-2">
-                    <label className="text-sm font-medium text-gray-600">Monthly Volume:</label>
-                    <input
-                      type="text"
-                      className="input text-sm w-32"
-                      value={formatInputNumber(modelData.capacity.toString())}
-                      onChange={(e) => {
-                        const newCapacity = parseFormattedNumber(e.target.value);
-                        setModelData({
-                          ...modelData,
-                          capacity: newCapacity,
-                          capacityAnnual: newCapacity * 12
-                        });
-                      }}
-                    />
-                    <span className="text-sm text-gray-500">tons</span>
-        </div>
-                  {/* Capacity Usage */}
-                  <div className="flex items-center gap-2">
-                    <label className="text-sm font-medium text-gray-600">Capacity Usage:</label>
-                    <input
-                      type="number"
-                      className="input text-sm w-20"
-                      value={capacityUsage}
-                      onChange={(e) => setCapacityUsage(parseFloat(e.target.value))}
-                      min="0"
-                      max="100"
-                      step="1"
-                    />
-                    <span className="text-sm text-gray-500">%</span>
-      </div>
                   {/* Product Selection */}
                   <select
                     className="input text-sm"
@@ -3741,12 +3762,57 @@ const EmpowerModel = () => {
                 </div>
               </div>
 
+              {/* Volume Simulation Controls (only for single product view) */}
+              {activeProductTier !== 'all' && (() => {
+                const tier = priceTiers.find(t => t.name === activeProductTier);
+                if (!tier) return null;
+                const baseMonthlyVolume = modelData.capacity * (capacityUsage / 100) * (tier.percentage / 100);
+                const minVolume = Math.max(1, Math.floor(baseMonthlyVolume * 0.5));
+                const maxVolume = Math.ceil(baseMonthlyVolume * 1.5);
+                const value = simulatedVolume[tier.name] ?? baseMonthlyVolume;
+                return (
+                  <div className="flex items-center gap-4 mb-4 bg-blue-50 p-3 rounded">
+                    <label className="font-medium">Simulate Monthly Volume:</label>
+                    <input
+                      type="range"
+                      min={minVolume}
+                      max={maxVolume}
+                      value={value}
+                      onChange={e => setSimulatedVolume(v => ({ ...v, [tier.name]: Number(e.target.value) }))}
+                      style={{ width: 200 }}
+                    />
+                    <input
+                      type="number"
+                      min={minVolume}
+                      max={maxVolume}
+                      value={value}
+                      onChange={e => setSimulatedVolume(v => ({ ...v, [tier.name]: Number(e.target.value) }))}
+                      className="w-24"
+                    />
+                    <span className="ml-2 text-gray-500">tons</span>
+                    <button
+                      onClick={() => setSimulatedVolume(v => ({ ...v, [tier.name]: null }))}
+                      className="btn btn-secondary ml-2"
+                      disabled={simulatedVolume[tier.name] == null}
+                    >
+                      Reset
+                    </button>
+                    {simulatedVolume[tier.name] != null && (
+                      <span className="ml-2 text-blue-600 font-semibold">Simulation Mode</span>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* Rest of the Product Cost Analysis content */}
               {priceTiers
                 .filter(tier => activeProductTier === 'all' || activeProductTier === tier.name)
                 .map(tier => {
+                  // Use simulated volume if set
+                  const monthlyVolume = (activeProductTier === tier.name && simulatedVolume[tier.name] != null)
+                    ? simulatedVolume[tier.name]!
+                    : modelData.capacity * (capacityUsage / 100) * (tier.percentage / 100);
                   // Calculate cost breakdown for the product
-                  const monthlyVolume = modelData.capacity * (capacityUsage / 100) * (tier.percentage / 100);
                   const productVariableCosts = variableCosts
                     .filter(cost => cost.tier === tier.name || cost.all)
                     .map(cost => {
@@ -3765,14 +3831,18 @@ const EmpowerModel = () => {
                     if (cost.annual) return sum + (cost.cost / 12);
                     return sum;
                   }, 0);
-                  
                   const allocatedFixedCosts = [{
                     name: 'Allocated Fixed Costs',
                     allocatedCost: (totalFixedCosts * (tier.percentage / 100)) / monthlyVolume,
                     percentageOfPrice: ((totalFixedCosts * (tier.percentage / 100)) / monthlyVolume / tier.price) * 100
                   }];
 
+                  // Contribution margin (variable only)
                   const totalVariableCost = productVariableCosts.reduce((sum, cost) => sum + cost.unitCost, 0);
+                  const contributionMargin = tier.price - totalVariableCost;
+                  const contributionMarginPercentage = (contributionMargin / tier.price) * 100;
+
+                  // Full cost (variable + allocated fixed)
                   const totalAllocatedFixedCost = allocatedFixedCosts[0].allocatedCost;
                   const totalCost = totalVariableCost + totalAllocatedFixedCost;
                   const margin = tier.price - totalCost;
@@ -3787,87 +3857,61 @@ const EmpowerModel = () => {
                         </div>
                       </div>
 
-                      {/* Cost Overview Cards */}
-                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                      {/* Contribution Margin Only */}
+                      <div className="mb-6">
+                        <h4 className="text-md font-semibold mb-2">Contribution Margin (Variable Costs Only)</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
                         <div className="bg-white p-4 rounded-lg border border-gray-200">
                           <div className="text-sm text-gray-500">Price</div>
                           <div className="text-xl font-bold">{formatNumber(tier.price)} THB</div>
                         </div>
                         <div className="bg-white p-4 rounded-lg border border-gray-200">
-                          <div className="text-sm text-gray-500">Total Cost</div>
-                          <div className="text-xl font-bold">{formatNumber(totalCost)} THB</div>
+                            <div className="text-sm text-gray-500">Variable Cost</div>
+                            <div className="text-xl font-bold">{formatNumber(totalVariableCost)} THB</div>
                         </div>
                         <div className="bg-white p-4 rounded-lg border border-gray-200">
-                          <div className="text-sm text-gray-500">Margin</div>
-                          <div className="text-xl font-bold">{formatNumber(margin)} THB</div>
+                            <div className="text-sm text-gray-500">Contribution Margin</div>
+                            <div className="text-xl font-bold">{formatNumber(contributionMargin)} THB</div>
                         </div>
                         <div className="bg-white p-4 rounded-lg border border-gray-200">
                           <div className="text-sm text-gray-500">Margin %</div>
-                          <div className="text-xl font-bold">{marginPercentage.toFixed(1)}%</div>
+                            <div className="text-xl font-bold">{contributionMarginPercentage.toFixed(1)}%</div>
+                          </div>
                         </div>
                       </div>
 
-                      {/* Cost Optimization Opportunities */}
+                      {/* Full Cost (Variable + Allocated Fixed) */}
                       <div className="mb-6">
-                        <h4 className="text-md font-semibold mb-4">Cost Optimization Opportunities</h4>
-                        <div className="space-y-4">
-                          {/* Volume-based Savings */}
-                          {productVariableCosts.some(cost => cost.percentageOfPrice > 15) && (
-                            <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
-                              <h5 className="font-medium text-yellow-800 mb-2">High Cost Components</h5>
-                              <ul className="list-disc list-inside text-sm text-yellow-700">
-                                {productVariableCosts
-                                  .filter(cost => cost.percentageOfPrice > 15)
-                                  .map(cost => (
-                                    <li key={cost.name}>
-                                      {cost.name} represents {cost.percentageOfPrice.toFixed(1)}% of the price. 
-                                      Consider negotiating better rates or finding alternative suppliers.
-                                    </li>
-                                  ))}
-                              </ul>
+                        <h4 className="text-md font-semibold mb-2">Full Cost (Variable + Allocated Fixed)</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                          <div className="bg-white p-4 rounded-lg border border-gray-200">
+                            <div className="text-sm text-gray-500">Price</div>
+                            <div className="text-xl font-bold">{formatNumber(tier.price)} THB</div>
                             </div>
-                          )}
-
-                          {/* Volume Optimization */}
-                          {marginPercentage < 20 && (
-                            <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-                              <h5 className="font-medium text-blue-800 mb-2">Margin Improvement Opportunities</h5>
-                              <ul className="list-disc list-inside text-sm text-blue-700">
-                                <li>Current margin ({marginPercentage.toFixed(1)}%) is below target. Consider:</li>
-                                <li>Increasing production volume to benefit from economies of scale</li>
-                                <li>Reviewing pricing strategy</li>
-                                <li>Optimizing fixed cost allocation</li>
-                              </ul>
+                          <div className="bg-white p-4 rounded-lg border border-gray-200">
+                            <div className="text-sm text-gray-500">Total Cost</div>
+                            <div className="text-xl font-bold">{formatNumber(totalCost)} THB</div>
                             </div>
-                          )}
-
-                          {/* Fixed Cost Allocation */}
-                          {allocatedFixedCosts[0].percentageOfPrice > 10 && (
-                            <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-                              <h5 className="font-medium text-green-800 mb-2">Fixed Cost Optimization</h5>
-                              <ul className="list-disc list-inside text-sm text-green-700">
-                                <li>
-                                  Fixed costs represent {allocatedFixedCosts[0].percentageOfPrice.toFixed(1)}% of the price.
-                                  Consider increasing production volume to better absorb fixed costs.
-                                </li>
-                              </ul>
+                          <div className="bg-white p-4 rounded-lg border border-gray-200">
+                            <div className="text-sm text-gray-500">Margin</div>
+                            <div className="text-xl font-bold">{formatNumber(margin)} THB</div>
                             </div>
-                          )}
+                          <div className="bg-white p-4 rounded-lg border border-gray-200">
+                            <div className="text-sm text-gray-500">Margin %</div>
+                            <div className="text-xl font-bold">{marginPercentage.toFixed(1)}%</div>
+                          </div>
                         </div>
                       </div>
 
                       {/* Cost Breakdown */}
                       <div className="mb-6">
                         <h4 className="text-md font-semibold mb-4">Cost Breakdown</h4>
-                        
                         {/* Sorting Options */}
                         <div className="flex justify-end mb-4">
                           <select
                             className="input text-sm"
                             defaultValue="percentage"
                             onChange={(e) => {
-                              // We'll handle the sorting in the render logic below
-                              // This is just to trigger a re-render
                               setModelVersion(prev => prev + 1);
                             }}
                             id="costSortOption"
@@ -3877,7 +3921,6 @@ const EmpowerModel = () => {
                             <option value="totalCost">Sort by Total Cost</option>
                           </select>
                         </div>
-
                         {/* Product Cost Analysis Table */}
                         <div className="overflow-x-auto">
                           <table className="min-w-full">
@@ -3905,10 +3948,8 @@ const EmpowerModel = () => {
                                       return b.percentageOfPrice - a.percentageOfPrice;
                                   }
                                 });
-
                                 const totalCostValue = sortedCosts.reduce((sum, cost) => sum + cost.totalCost, 0) + 
                                   (allocatedFixedCosts[0]?.allocatedCost || 0) * monthlyVolume;
-
                                 const getIndicatorColor = (index: number) => {
                                   switch(index) {
                                     case 0: return 'text-red-500';
@@ -3917,11 +3958,9 @@ const EmpowerModel = () => {
                                     default: return '';
                                   }
                                 };
-
                                 return sortedCosts.map((cost, index) => {
                                   const isTopThree = index < 3;
                                   const percentageOfTotalCost = (cost.totalCost / totalCostValue) * 100;
-
                                   return (
                                     <tr key={cost.name} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                                       <td className="px-4 py-2">
@@ -3983,7 +4022,6 @@ const EmpowerModel = () => {
                                 const totalCostValue = productVariableCosts.reduce((sum, cost) => sum + cost.totalCost, 0) + 
                                   cost.allocatedCost * monthlyVolume;
                                 const percentageOfTotalCost = ((cost.allocatedCost * monthlyVolume) / totalCostValue) * 100;
-
                                 return (
                                   <tr key={cost.name} className="bg-blue-50">
                                     <td className="px-4 py-2">
@@ -4000,7 +4038,6 @@ const EmpowerModel = () => {
                             </tbody>
                           </table>
                         </div>
-
                         {/* Legend for Top Costs */}
                         <div className="mt-4 text-sm text-gray-600">
                           <div className="flex items-center gap-6">
@@ -4019,6 +4056,54 @@ const EmpowerModel = () => {
                           </div>
                         </div>
                       </div>
+                      {/* Cost Optimization Opportunities (moved below breakdown) */}
+                      <div className="mb-6">
+                        <h4 className="text-md font-semibold mb-4">Cost Optimization Opportunities</h4>
+                        <div className="space-y-4">
+                          {/* Volume-based Savings */}
+                          {productVariableCosts.some(cost => cost.percentageOfPrice > 15) && (
+                            <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
+                              <h5 className="font-medium text-yellow-800 mb-2">High Cost Components</h5>
+                              <ul className="list-disc list-inside text-sm text-yellow-700">
+                                {productVariableCosts
+                                  .filter(cost => cost.percentageOfPrice > 15)
+                                  .map(cost => (
+                                    <li key={cost.name}>
+                                      {cost.name} represents {cost.percentageOfPrice.toFixed(1)}% of the price. 
+                                      Consider negotiating better rates or finding alternative suppliers.
+                                    </li>
+                                  ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* Volume Optimization */}
+                          {marginPercentage < 20 && (
+                            <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                              <h5 className="font-medium text-blue-800 mb-2">Margin Improvement Opportunities</h5>
+                              <ul className="list-disc list-inside text-sm text-blue-700">
+                                <li>Current margin ({marginPercentage.toFixed(1)}%) is below target. Consider:</li>
+                                <li>Increasing production volume to benefit from economies of scale</li>
+                                <li>Reviewing pricing strategy</li>
+                                <li>Optimizing fixed cost allocation</li>
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* Fixed Cost Allocation */}
+                          {allocatedFixedCosts[0].percentageOfPrice > 10 && (
+                            <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+                              <h5 className="font-medium text-green-800 mb-2">Fixed Cost Optimization</h5>
+                              <ul className="list-disc list-inside text-sm text-green-700">
+                                <li>
+                                  Fixed costs represent {allocatedFixedCosts[0].percentageOfPrice.toFixed(1)}% of the price.
+                                  Consider increasing production volume to better absorb fixed costs.
+                                </li>
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   );
                 })}
@@ -4026,6 +4111,39 @@ const EmpowerModel = () => {
           )}
         </div>
       </div>
+
+      {/* Model Parameters Modal */}
+      <ModelParametersModal
+        isOpen={isParamsModalOpen}
+        onClose={() => setParamsModalOpen(false)}
+        modelData={modelData}
+        setModelData={setModelData}
+        yearConfig={yearConfig}
+        setYearConfig={setYearConfig}
+        capacityUsage={capacityUsage}
+        setCapacityUsage={setCapacityUsage}
+        capacityGrowth={capacityGrowth}
+        setCapacityGrowth={setCapacityGrowth}
+        priceTiers={priceTiers}
+        setPriceTiers={setPriceTiers}
+        priceGrowth={priceGrowth}
+        setPriceGrowth={setPriceGrowth}
+        fixedCosts={fixedCosts}
+        setFixedCosts={setFixedCosts}
+        variableCosts={variableCosts}
+        setVariableCosts={setVariableCosts}
+        loans={loans}
+        setLoans={setLoans}
+        durationInput={durationInput}
+        setDurationInput={setDurationInput}
+        handleDurationChange={handleDurationChange}
+        updateYearRange={updateYearRange}
+        formatInputNumber={formatInputNumber}
+        parseFormattedNumber={parseFormattedNumber}
+        formatNumber={formatNumber}
+        yieldLoss={yieldLoss}
+        setYieldLoss={setYieldLoss}
+      />
     </div>
   );
 };
