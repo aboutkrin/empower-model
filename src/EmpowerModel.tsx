@@ -103,7 +103,7 @@ interface ProductCostBreakdown {
 }
 
 // Add TypeScript interfaces for better type safety
-type TabType = 'dashboard' | 'financials' | 'cashflow' | 'breakeven' | 'breakevenWithDebt' | 'productCostAnalysis' | 'costing' | 'loans' | 'statistics';
+type TabType = 'dashboard' | 'financials' | 'cashflow' | 'breakeven' | 'breakevenWithDebt' | 'productCostAnalysis' | 'costing' | 'loans' | 'statistics' | 'financialModel';
 
 const EmpowerModel = () => {
   // Model state
@@ -158,6 +158,9 @@ const EmpowerModel = () => {
   
   // Add this with the other state declarations
   const [yieldLoss, setYieldLoss] = useState<number>(defaultParameters.yieldLoss);
+  
+  // Add state for financial model utilization rate
+  const [financialModelUtilization, setFinancialModelUtilization] = useState<number>(capacityUsage);
   
   // Add this function to update years when configuration changes
   const updateYearRange = (startYear: number, duration: number) => {
@@ -1172,6 +1175,93 @@ const EmpowerModel = () => {
     );
   };
 
+  // Financial Model calculations for GP, EBITDA, and Net Profit (single year only)
+  const calculateFinancialModelProjections = (utilizationRate: number) => {
+    const weightedPrice = priceTiers.reduce((sum, tier) => 
+      sum + (tier.price * (tier.percentage / 100)), 0);
+
+    // Calculate for current year only (no future projections)
+    const year = yearConfig.startYear;
+    
+    // Calculate volumes based on the financial model utilization rate
+    const monthlyVolume = modelData.capacity * (utilizationRate / 100);
+    const annualVolume = monthlyVolume * 12;
+    
+    // Calculate revenue (no price growth for single year)
+    const yearlyPrice = weightedPrice;
+    const revenue = (annualVolume * yearlyPrice) / 1000000;
+    
+    // Calculate variable costs with yield loss (same method as break-even analysis)
+    const effectiveVolume = monthlyVolume / (1 - yieldLoss / 100);
+    const cogs = variableCosts.reduce((sum, cost) => {
+      const effectiveUnitCost = calculateEffectiveVariableCost(cost, effectiveVolume);
+      if (cost.all) {
+        return sum + (effectiveVolume * effectiveUnitCost * 12);
+      } else {
+        const matchingTier = priceTiers.find(tier => tier.name === cost.tier);
+        if (matchingTier) {
+          const tierVolume = (monthlyVolume * (matchingTier.percentage / 100));
+          const effectiveTierVolume = tierVolume / (1 - yieldLoss / 100);
+          return sum + (effectiveTierVolume * effectiveUnitCost * 12);
+        }
+      }
+      return sum;
+    }, 0) / 1000000;
+    
+    // Gross Profit = Revenue - COGS
+    const grossProfit = revenue - cogs;
+    const grossProfitMargin = revenue > 0 ? (grossProfit / revenue) * 100 : 0;
+    
+    // Calculate ALL fixed costs (same method as break-even analysis)
+    const monthlyFixedCosts = fixedCosts.reduce((sum, item) => {
+      if (item.monthly) return sum + item.cost;
+      if (item.annual) return sum + (item.cost / 12);
+      return sum;
+    }, 0);
+    const operatingExpenses = (monthlyFixedCosts * 12) / 1000000;
+    
+    // For consistency with break-even analysis, treat all fixed costs as operating expenses
+    // EBITDA = Gross Profit - Operating Expenses (which includes all fixed costs)
+    const ebitda = grossProfit - operatingExpenses;
+    const ebitdaMargin = revenue > 0 ? (ebitda / revenue) * 100 : 0;
+    
+    // EBIT = EBITDA (since operating expenses already include all fixed costs including depreciation)
+    const ebit = ebitda;
+    const ebitMargin = revenue > 0 ? (ebit / revenue) * 100 : 0;
+    
+    // Set depreciation to 0 since it's already included in operating expenses
+    const depreciation = 0;
+    
+    // Calculate interest expense from loans
+    const amortizationSchedule = generateAmortizationSchedule(loans);
+    const yearSchedule = amortizationSchedule.find(s => s.year === year);
+    const interestExpense = yearSchedule ? yearSchedule.interest / 1000000 : 0;
+    
+    // Net Profit = EBIT - Interest Expense
+    const netProfit = ebit - interestExpense;
+    const netProfitMargin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
+
+    // Return single year as array for consistency with existing code
+    return [{
+      year,
+      revenue,
+      cogs,
+      grossProfit,
+      grossProfitMargin,
+      operatingExpenses,
+      ebitda,
+      ebitdaMargin,
+      depreciation,
+      ebit,
+      ebitMargin,
+      interestExpense,
+      netProfit,
+      netProfitMargin,
+      monthlyVolume,
+      annualVolume
+    }];
+  };
+
   const MetricsCard = () => (
     <div className="bg-white rounded-lg shadow p-6">
       <h3 className="text-lg font-semibold mb-4">Key Metrics</h3>
@@ -1390,6 +1480,12 @@ const EmpowerModel = () => {
           }}
         >
           Costing
+        </button>
+        <button
+          className={`px-4 py-3 ${activeTab === 'financialModel' ? 'text-blue-700 border-b-2 border-blue-700 font-medium' : 'text-gray-600'}`}
+          onClick={() => setActiveTab('financialModel')}
+        >
+          Financial Model
         </button>
       </div>
 
@@ -4107,6 +4203,352 @@ const EmpowerModel = () => {
                     </div>
                   );
                 })}
+            </div>
+          )}
+
+          {activeTab === 'financialModel' && (
+            <div className="space-y-6 p-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-bold">Financial Model - GP, EBITDA & Net Profit</h2>
+                <div className="flex gap-4 items-center">
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm font-medium">Utilization Rate:</label>
+                    <input
+                      type="range"
+                      min="10"
+                      max="100"
+                      step="1"
+                      value={financialModelUtilization}
+                      onChange={(e) => setFinancialModelUtilization(Number(e.target.value))}
+                      className="w-32"
+                    />
+                    <input
+                      type="number"
+                      min="10"
+                      max="100"
+                      value={financialModelUtilization}
+                      onChange={(e) => setFinancialModelUtilization(Number(e.target.value))}
+                      className="w-20 px-2 py-1 border rounded text-center"
+                    />
+                    <span className="text-sm text-gray-500">%</span>
+                  </div>
+                  <button
+                    onClick={() => setFinancialModelUtilization(capacityUsage)}
+                    className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded text-sm"
+                  >
+                    Reset to Main Model
+                  </button>
+                </div>
+              </div>
+
+              {(() => {
+                const projections = calculateFinancialModelProjections(financialModelUtilization);
+                
+                // Single year metrics (no averaging needed)
+                const currentYear = projections.length > 0 ? projections[0] : null;
+                const avgMetrics = currentYear ? {
+                  revenue: currentYear.revenue,
+                  grossProfit: currentYear.grossProfit,
+                  ebitda: currentYear.ebitda,
+                  netProfit: currentYear.netProfit,
+                  grossMargin: currentYear.grossProfitMargin,
+                  ebitdaMargin: currentYear.ebitdaMargin,
+                  netMargin: currentYear.netProfitMargin
+                } : { revenue: 0, grossProfit: 0, ebitda: 0, netProfit: 0, grossMargin: 0, ebitdaMargin: 0, netMargin: 0 };
+
+                return (
+                  <>
+                    {/* Key Financial Metrics Summary */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                      <div className="card">
+                        <h3 className="text-lg font-semibold mb-4">Gross Profit</h3>
+                        <div className="text-3xl font-bold text-green-600 mb-2">
+                          {formatNumber(avgMetrics.grossProfit)} M THB
+                        </div>
+                                                 <div className="text-sm text-gray-500">
+                           Margin: {avgMetrics.grossMargin.toFixed(1)}%
+                         </div>
+                         <div className="text-xs text-gray-400 mt-2">
+                           Current Year at {financialModelUtilization}% Utilization
+                         </div>
+                      </div>
+
+                      <div className="card">
+                        <h3 className="text-lg font-semibold mb-4">EBITDA</h3>
+                        <div className="text-3xl font-bold text-blue-600 mb-2">
+                          {formatNumber(avgMetrics.ebitda)} M THB
+                        </div>
+                                                 <div className="text-sm text-gray-500">
+                           Margin: {avgMetrics.ebitdaMargin.toFixed(1)}%
+                         </div>
+                        <div className="text-xs text-gray-400 mt-2">
+                          Earnings Before Interest, Taxes, Depreciation & Amortization
+                        </div>
+                      </div>
+
+                      <div className="card">
+                        <h3 className="text-lg font-semibold mb-4">Net Profit</h3>
+                        <div className="text-3xl font-bold text-purple-600 mb-2">
+                          {formatNumber(avgMetrics.netProfit)} M THB
+                        </div>
+                                                 <div className="text-sm text-gray-500">
+                           Margin: {avgMetrics.netMargin.toFixed(1)}%
+                         </div>
+                        <div className="text-xs text-gray-400 mt-2">
+                          After interest and taxes
+                        </div>
+                      </div>
+                    </div>
+
+                                         {/* Financial Performance Chart */}
+                     <div className="card">
+                       <h3 className="text-lg font-bold mb-6">Financial Performance at {financialModelUtilization}% Utilization</h3>
+                      <div className="h-[400px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={projections} margin={{ top: 5, right: 30, left: 20, bottom: 60 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                            <XAxis 
+                              dataKey="year" 
+                              tick={{ fill: '#6B7280' }}
+                              angle={-45}
+                              textAnchor="end"
+                              height={60}
+                            />
+                            <YAxis 
+                              tick={{ fill: '#6B7280' }}
+                              tickFormatter={(value) => `${value.toFixed(0)}M`}
+                            />
+                            <Tooltip 
+                              contentStyle={{ 
+                                backgroundColor: 'white',
+                                border: 'none',
+                                borderRadius: '8px',
+                                boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+                              }}
+                              formatter={(value: number) => [`${value.toFixed(2)} M THB`, '']}
+                              labelFormatter={(year) => `Year ${year}`}
+                            />
+                            <Legend />
+                            <Line 
+                              type="monotone" 
+                              dataKey="revenue" 
+                              stroke="#0EA5E9" 
+                              strokeWidth={2}
+                              dot={{ fill: '#0EA5E9', r: 4 }}
+                              name="Revenue" 
+                              isAnimationActive={false}
+                            />
+                            <Line 
+                              type="monotone" 
+                              dataKey="grossProfit" 
+                              stroke="#10B981" 
+                              strokeWidth={2}
+                              dot={{ fill: '#10B981', r: 4 }}
+                              name="Gross Profit" 
+                              isAnimationActive={false}
+                            />
+                            <Line 
+                              type="monotone" 
+                              dataKey="ebitda" 
+                              stroke="#3B82F6" 
+                              strokeWidth={2}
+                              dot={{ fill: '#3B82F6', r: 4 }}
+                              name="EBITDA" 
+                              isAnimationActive={false}
+                            />
+                            <Line 
+                              type="monotone" 
+                              dataKey="netProfit" 
+                              stroke="#8B5CF6" 
+                              strokeWidth={2}
+                              dot={{ fill: '#8B5CF6', r: 4 }}
+                              name="Net Profit" 
+                              isAnimationActive={false}
+                            />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    {/* Margin Analysis Chart */}
+                    <div className="card">
+                      <h3 className="text-lg font-bold mb-6">Margin Analysis</h3>
+                      <div className="h-[300px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={projections} margin={{ top: 5, right: 30, left: 20, bottom: 40 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                            <XAxis dataKey="year" tick={{ fill: '#6B7280' }} />
+                            <YAxis 
+                              tick={{ fill: '#6B7280' }}
+                              tickFormatter={(value) => `${value.toFixed(0)}%`}
+                            />
+                            <Tooltip 
+                              formatter={(value: number) => [`${value.toFixed(1)}%`, '']}
+                              labelFormatter={(year) => `Year ${year}`}
+                            />
+                            <Legend />
+                            <Line 
+                              type="monotone" 
+                              dataKey="grossProfitMargin" 
+                              stroke="#10B981" 
+                              strokeWidth={2}
+                              dot={{ fill: '#10B981', r: 3 }}
+                              name="Gross Margin %" 
+                              isAnimationActive={false}
+                            />
+                            <Line 
+                              type="monotone" 
+                              dataKey="ebitdaMargin" 
+                              stroke="#3B82F6" 
+                              strokeWidth={2}
+                              dot={{ fill: '#3B82F6', r: 3 }}
+                              name="EBITDA Margin %" 
+                              isAnimationActive={false}
+                            />
+                            <Line 
+                              type="monotone" 
+                              dataKey="netProfitMargin" 
+                              stroke="#8B5CF6" 
+                              strokeWidth={2}
+                              dot={{ fill: '#8B5CF6', r: 3 }}
+                              name="Net Margin %" 
+                              isAnimationActive={false}
+                            />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                                         {/* Detailed Financial Table */}
+                     <div className="card">
+                       <h3 className="text-lg font-bold mb-6">Financial Breakdown for {currentYear?.year || yearConfig.startYear}</h3>
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full">
+                          <thead>
+                            <tr className="bg-gray-50">
+                              <th className="px-4 py-2 text-left">Year</th>
+                              <th className="px-4 py-2 text-right">Revenue (M THB)</th>
+                              <th className="px-4 py-2 text-right">COGS (M THB)</th>
+                              <th className="px-4 py-2 text-right">Gross Profit (M THB)</th>
+                              <th className="px-4 py-2 text-right">Operating Exp (M THB)</th>
+                              <th className="px-4 py-2 text-right">EBITDA (M THB)</th>
+                              <th className="px-4 py-2 text-right">Depreciation (M THB)</th>
+                              <th className="px-4 py-2 text-right">EBIT (M THB)</th>
+                              <th className="px-4 py-2 text-right">Interest (M THB)</th>
+                              <th className="px-4 py-2 text-right">Net Profit (M THB)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {projections.map((year, index) => (
+                              <tr key={year.year} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                <td className="px-4 py-2 font-medium">{year.year}</td>
+                                <td className="px-4 py-2 text-right">{formatNumber(year.revenue)}</td>
+                                <td className="px-4 py-2 text-right text-red-600">{formatNumber(year.cogs)}</td>
+                                <td className="px-4 py-2 text-right text-green-600 font-medium">{formatNumber(year.grossProfit)}</td>
+                                <td className="px-4 py-2 text-right text-red-600">{formatNumber(year.operatingExpenses)}</td>
+                                <td className="px-4 py-2 text-right text-blue-600 font-medium">{formatNumber(year.ebitda)}</td>
+                                <td className="px-4 py-2 text-right text-gray-600">{formatNumber(year.depreciation)}</td>
+                                <td className="px-4 py-2 text-right text-indigo-600 font-medium">{formatNumber(year.ebit)}</td>
+                                <td className="px-4 py-2 text-right text-red-600">{formatNumber(year.interestExpense)}</td>
+                                <td className="px-4 py-2 text-right text-purple-600 font-bold">{formatNumber(year.netProfit)}</td>
+                              </tr>
+                            ))}
+                                                         {/* Summary Row */}
+                             <tr className="bg-gray-100 font-bold border-t-2">
+                               <td className="px-4 py-2">TOTAL</td>
+                                                             <td className="px-4 py-2 text-right">{formatNumber(avgMetrics.revenue)}</td>
+                               <td className="px-4 py-2 text-right text-red-600">{formatNumber(currentYear?.cogs || 0)}</td>
+                               <td className="px-4 py-2 text-right text-green-600">{formatNumber(avgMetrics.grossProfit)}</td>
+                               <td className="px-4 py-2 text-right text-red-600">{formatNumber(currentYear?.operatingExpenses || 0)}</td>
+                               <td className="px-4 py-2 text-right text-blue-600">{formatNumber(avgMetrics.ebitda)}</td>
+                               <td className="px-4 py-2 text-right text-gray-600">{formatNumber(currentYear?.depreciation || 0)}</td>
+                               <td className="px-4 py-2 text-right text-indigo-600">{formatNumber(currentYear?.ebit || 0)}</td>
+                               <td className="px-4 py-2 text-right text-red-600">{formatNumber(currentYear?.interestExpense || 0)}</td>
+                               <td className="px-4 py-2 text-right text-purple-600">{formatNumber(avgMetrics.netProfit)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    
+                     {/* Financial Insights */}
+                     <div className="card">
+                       <h3 className="text-lg font-bold mb-4">Financial Insights</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                          <h4 className="font-semibold mb-3 text-green-700">Profitability Analysis</h4>
+                          <div className="space-y-2 text-sm">
+                            <div className="flex justify-between">
+                              <span>Gross Profit Margin:</span>
+                              <span className="font-medium">{avgMetrics.grossMargin.toFixed(1)}%</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>EBITDA Margin:</span>
+                              <span className="font-medium">{avgMetrics.ebitdaMargin.toFixed(1)}%</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Net Profit Margin:</span>
+                              <span className="font-medium">{avgMetrics.netMargin.toFixed(1)}%</span>
+                            </div>
+                                                         <div className="flex justify-between border-t pt-2">
+                               <span>Annual Revenue:</span>
+                               <span className="font-bold">{formatNumber(avgMetrics.revenue)} M THB</span>
+                             </div>
+                          </div>
+                        </div>
+                        
+                        <div>
+                          <h4 className="font-semibold mb-3 text-blue-700">Utilization Impact</h4>
+                          <div className="space-y-2 text-sm">
+                            <div className="flex justify-between">
+                              <span>Current Utilization:</span>
+                              <span className="font-medium">{financialModelUtilization}%</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Monthly Volume:</span>
+                              <span className="font-medium">{formatNumber(modelData.capacity * (financialModelUtilization / 100))} tons</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Annual Volume:</span>
+                              <span className="font-medium">{formatNumber(modelData.capacity * (financialModelUtilization / 100) * 12)} tons</span>
+                            </div>
+                            <div className="flex justify-between border-t pt-2">
+                              <span>Revenue per Ton:</span>
+                              <span className="font-bold">{formatNumber(avgMetrics.revenue * 1000000 / (modelData.capacity * (financialModelUtilization / 100) * 12))} THB</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {avgMetrics.netMargin < 5 && (
+                        <div className="mt-4 p-3 bg-yellow-50 border-l-4 border-yellow-400 rounded">
+                          <p className="text-yellow-800 text-sm">
+                            <strong>Warning:</strong> Net profit margin is below 5%. Consider reviewing pricing strategy, cost optimization, or increasing utilization rate.
+                          </p>
+                        </div>
+                      )}
+                      
+                      {avgMetrics.ebitdaMargin > 20 && (
+                        <div className="mt-4 p-3 bg-green-50 border-l-4 border-green-400 rounded">
+                          <p className="text-green-800 text-sm">
+                            <strong>Excellent:</strong> EBITDA margin above 20% indicates strong operational efficiency.
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Break-even consistency note */}
+                      <div className="mt-4 p-3 bg-blue-50 border-l-4 border-blue-400 rounded">
+                        <p className="text-blue-800 text-sm">
+                          <strong>Note:</strong> Based on the break-even analysis, you need approximately 40.8% capacity utilization to break even. 
+                          Utilization rates below this should show losses, while rates above should show profits. 
+                          This Financial Model is now consistent with the break-even calculations.
+                        </p>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           )}
         </div>
